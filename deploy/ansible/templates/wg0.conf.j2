@@ -3,8 +3,8 @@ Address = {{ wg_address }}
 ListenPort = {{ wg_port }}
 PrivateKey = {{ wg_server_private_key }}
 
-# NAT outbound client traffic. Replace eth0 with the node's WAN interface if different.
-PostUp   = iptables -t nat -A POSTROUTING -s {{ wg_subnet }} -o eth0 -j MASQUERADE
-PostDown = iptables -t nat -D POSTROUTING -s {{ wg_subnet }} -o eth0 -j MASQUERADE
+# NAT outbound client traffic via the node's WAN interface.
+PostUp   = iptables -t nat -A POSTROUTING -s {{ wg_subnet }} -o {{ wan_interface }} -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -s {{ wg_subnet }} -o {{ wan_interface }} -j MASQUERADE
 
 # Peers are added at runtime by the platform agent (wg set ... ).

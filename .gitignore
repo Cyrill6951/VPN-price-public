@@ -9,6 +9,13 @@
 *.pem
 *.key
 
+# Ansible: never commit real hosts, credentials or built agent binary
+deploy/ansible/inventory.ini
+deploy/ansible/secrets/
+deploy/ansible/**/vault.yml
+deploy/ansible/files/agent
+*.retry
+
 # Go
 vendor/
 /coverage.out

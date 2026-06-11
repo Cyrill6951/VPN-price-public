@@ -109,6 +109,12 @@
         - "22"
         - "{{ wg_port }}"
         - "{{ reality_port }}"
+        - "{{ agent_port | default(8090) }}"
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+        policy: allow
 
   handlers:
     - name: restart xray
