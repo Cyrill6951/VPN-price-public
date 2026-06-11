@@ -1,0 +1,16 @@
+[Unit]
+Description=VPN Platform Node Agent
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/vpn-agent.env
+ExecStart=/usr/local/bin/vpn-agent
+Restart=on-failure
+RestartSec=3
+# Needs privileges to run `wg set`.
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

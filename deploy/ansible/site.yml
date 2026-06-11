@@ -1,0 +1,122 @@
+---
+- name: Provision VPN node (WireGuard + Xray Reality + agent)
+  hosts: vpn_nodes
+  become: true
+
+  tasks:
+    # --- Base system -----------------------------------------------------
+    - name: Update apt cache and install base packages
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - wireguard
+          - wireguard-tools
+          - ufw
+          - curl
+          - ca-certificates
+        state: present
+
+    - name: Enable IPv4 forwarding
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+        reload: true
+
+    - name: Install Docker (convenience script)
+      ansible.builtin.shell: |
+        if ! command -v docker >/dev/null 2>&1; then
+          curl -fsSL https://get.docker.com | sh
+        fi
+      args:
+        creates: /usr/bin/docker
+
+    # --- WireGuard -------------------------------------------------------
+    - name: Render WireGuard config
+      ansible.builtin.template:
+        src: templates/wg0.conf.j2
+        dest: /etc/wireguard/wg0.conf
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Enable and start wg-quick@wg0
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        enabled: true
+        state: started
+
+    # --- Xray (VLESS + Reality) -----------------------------------------
+    - name: Create Xray config dir
+      ansible.builtin.file:
+        path: /opt/vpn-node
+        state: directory
+        mode: "0755"
+
+    - name: Render Xray config
+      ansible.builtin.template:
+        src: templates/xray.json.j2
+        dest: /opt/vpn-node/xray.json
+        mode: "0644"
+      notify: restart xray
+
+    - name: Copy node docker-compose
+      ansible.builtin.copy:
+        src: files/docker-compose.node.yml
+        dest: /opt/vpn-node/docker-compose.yml
+        mode: "0644"
+
+    - name: Start node containers (xray + node_exporter)
+      ansible.builtin.command:
+        cmd: docker compose -f /opt/vpn-node/docker-compose.yml up -d
+      changed_when: true
+
+    # --- Platform agent (systemd) ---------------------------------------
+    - name: Install agent binary
+      ansible.builtin.copy:
+        src: files/agent
+        dest: /usr/local/bin/vpn-agent
+        mode: "0755"
+
+    - name: Render agent environment
+      ansible.builtin.template:
+        src: templates/agent.env.j2
+        dest: /etc/vpn-agent.env
+        mode: "0600"
+
+    - name: Render agent service
+      ansible.builtin.template:
+        src: templates/agent.service.j2
+        dest: /etc/systemd/system/vpn-agent.service
+        mode: "0644"
+      notify: restart agent
+
+    - name: Enable and start agent
+      ansible.builtin.systemd:
+        name: vpn-agent
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    # --- Firewall --------------------------------------------------------
+    - name: Configure UFW
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: "{{ 'udp' if item == wg_port else 'tcp' }}"
+      loop:
+        - "22"
+        - "{{ wg_port }}"
+        - "{{ reality_port }}"
+
+  handlers:
+    - name: restart xray
+      ansible.builtin.command:
+        cmd: docker compose -f /opt/vpn-node/docker-compose.yml restart xray
+      changed_when: true
+
+    - name: restart agent
+      ansible.builtin.systemd:
+        name: vpn-agent
+        state: restarted

@@ -1,0 +1,20 @@
+name: vpn-node
+
+services:
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /opt/vpn-node/xray.json:/etc/xray/config.json:ro
+    command: ["run", "-c", "/etc/xray/config.json"]
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - /:/host:ro,rslave

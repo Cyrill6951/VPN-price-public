@@ -16,7 +16,9 @@ import (
 	"github.com/vpnsaas/platform/internal/platform/httpx"
 	"github.com/vpnsaas/platform/internal/platform/logger"
 	"github.com/vpnsaas/platform/internal/platform/observability"
+	"github.com/vpnsaas/platform/internal/platform/storage"
 	"github.com/vpnsaas/platform/internal/user"
+	"github.com/vpnsaas/platform/internal/vpn"
 )
 
 func main() {
@@ -68,6 +70,27 @@ func run() error {
 	userRepo := user.NewRepository(db)
 	userHandler := user.NewHandler(userRepo, authMW)
 
+	// VPN module.
+	objStore, err := storage.New(ctx, storage.Config{
+		Endpoint:  cfg.MinioEndpoint,
+		AccessKey: cfg.MinioAccessKey,
+		SecretKey: cfg.MinioSecretKey,
+		Bucket:    cfg.MinioBucket,
+		UseSSL:    cfg.MinioUseSSL,
+	})
+	if err != nil {
+		return err
+	}
+	log.Info("connected to object storage", "bucket", cfg.MinioBucket)
+
+	vpnCipher, err := vpn.NewCipher(cfg.VPNConfigKeyHex)
+	if err != nil {
+		return err
+	}
+	provisioner := vpn.NewProvisioner(cfg.ProvisionerMode, log, cfg.ProvisionerAgentToken)
+	vpnSvc := vpn.NewService(vpn.NewRepository(db), objStore, vpnCipher, provisioner, log)
+	vpnHandler := vpn.NewHandler(vpnSvc, authMW)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", checker.Live)
 	mux.HandleFunc("GET /ready", checker.Ready)
@@ -75,6 +98,7 @@ func run() error {
 
 	authHandler.RegisterRoutes(mux)
 	userHandler.RegisterRoutes(mux)
+	vpnHandler.RegisterRoutes(mux)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestID,

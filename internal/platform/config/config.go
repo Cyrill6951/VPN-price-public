@@ -24,6 +24,18 @@ type Config struct {
 	AccessTokenTTL   time.Duration // access token lifetime
 	RefreshTokenTTL  time.Duration // refresh token lifetime
 	TelegramBotToken string        // used to verify Telegram Login signatures
+
+	// Object storage (MinIO/S3) for VPN configs and QR codes.
+	MinioEndpoint  string
+	MinioAccessKey string
+	MinioSecretKey string
+	MinioBucket    string
+	MinioUseSSL    bool
+
+	// VPN
+	VPNConfigKeyHex       string // hex-encoded 32-byte AES key for config encryption
+	ProvisionerMode       string // noop | agent
+	ProvisionerAgentToken string // bearer token for the node agent (agent mode)
 }
 
 // Load reads configuration from the environment, applying sane defaults.
@@ -41,6 +53,17 @@ func Load() (*Config, error) {
 		AccessTokenTTL:   getdur("JWT_ACCESS_TTL", 15*time.Minute),
 		RefreshTokenTTL:  getdur("JWT_REFRESH_TTL", 30*24*time.Hour),
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
+
+		MinioEndpoint:  getenv("MINIO_ENDPOINT", "minio:9000"),
+		MinioAccessKey: getenv("MINIO_ACCESS_KEY", getenv("MINIO_ROOT_USER", "minioadmin")),
+		MinioSecretKey: getenv("MINIO_SECRET_KEY", getenv("MINIO_ROOT_PASSWORD", "minioadmin")),
+		MinioBucket:    getenv("MINIO_BUCKET", "vpn-configs"),
+		MinioUseSSL:    getbool("MINIO_USE_SSL", false),
+
+		VPNConfigKeyHex: getenv("VPN_CONFIG_KEY",
+			"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
+		ProvisionerMode:       getenv("PROVISIONER_MODE", "noop"),
+		ProvisionerAgentToken: os.Getenv("PROVISIONER_AGENT_TOKEN"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -69,6 +92,15 @@ func getdur(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return fallback
+}
+
+func getbool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

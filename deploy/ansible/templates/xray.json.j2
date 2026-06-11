@@ -1,0 +1,39 @@
+{
+  "log": { "loglevel": "warning" },
+  "api": { "tag": "api", "services": ["HandlerService", "StatsService"] },
+  "inbounds": [
+    {
+      "tag": "vless-reality",
+      "listen": "0.0.0.0",
+      "port": {{ reality_port }},
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "{{ reality_dest }}",
+          "xver": 0,
+          "serverNames": ["{{ reality_sni }}"],
+          "privateKey": "{{ reality_private_key }}",
+          "shortIds": ["{{ reality_short_id }}"]
+        }
+      }
+    },
+    {
+      "tag": "api",
+      "listen": "127.0.0.1",
+      "port": 10085,
+      "protocol": "dokodemo-door",
+      "settings": { "address": "127.0.0.1" }
+    }
+  ],
+  "outbounds": [{ "protocol": "freedom" }],
+  "routing": {
+    "rules": [{ "type": "field", "inboundTag": ["api"], "outboundTag": "api" }]
+  }
+}

@@ -24,6 +24,15 @@ lint: ## Run golangci-lint
 test: ## Run tests
 	go test ./... -race -count=1
 
+seed: ## Seed dev catalogue (countries, plans, dev server)
+	docker run --rm --network vpn-platform_default -v "$(CURDIR)":/src -w /src \
+		-e DATABASE_URL=postgres://vpn:vpn@postgres:5432/vpn?sslmode=disable \
+		golang:1.23-alpine go run ./cmd/seed
+
+build-agent: ## Build the node agent binary (linux/amd64) into bin/agent
+	docker run --rm -v "$(CURDIR)":/src -w /src -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH=amd64 \
+		golang:1.23-alpine go build -o bin/agent ./cmd/agent
+
 migrate-up: ## Apply DB migrations (goose in container)
 	docker compose -f deploy/docker-compose.yml run --rm migrate up
 
