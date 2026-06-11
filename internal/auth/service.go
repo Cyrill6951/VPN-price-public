@@ -153,6 +153,16 @@ func (s *Service) UserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return s.repo.GetUserByID(ctx, id)
 }
 
+// EnsureTelegramUser returns the user linked to a Telegram id, creating one on
+// first contact. Used by the bot, where the Telegram id is inherently trusted.
+func (s *Service) EnsureTelegramUser(ctx context.Context, tgID int64, firstName, lastName, username string) (User, error) {
+	u, err := s.repo.GetUserByTelegramID(ctx, tgID)
+	if errors.Is(err, ErrNotFound) {
+		return s.repo.CreateTelegramUser(ctx, tgID, firstName, lastName, username)
+	}
+	return u, err
+}
+
 func (s *Service) issueTokens(ctx context.Context, u User, meta LoginMeta) (TokenPair, error) {
 	access, _, expiresAt, err := s.tokens.IssueAccess(u.ID, u.Role)
 	if err != nil {

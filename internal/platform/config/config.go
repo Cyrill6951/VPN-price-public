@@ -42,6 +42,7 @@ type Config struct {
 	CryptomusMerchant string        // Cryptomus merchant id (optional)
 	CryptomusAPIKey   string        // Cryptomus API key (optional)
 	GracePeriod       time.Duration // subscription grace period after expiry
+	StarsPerUSD       float64       // Telegram Stars per USD for invoice pricing
 }
 
 // Load reads configuration from the environment, applying sane defaults.
@@ -75,6 +76,7 @@ func Load() (*Config, error) {
 		CryptomusMerchant: os.Getenv("CRYPTOMUS_MERCHANT"),
 		CryptomusAPIKey:   os.Getenv("CRYPTOMUS_API_KEY"),
 		GracePeriod:       getdur("GRACE_PERIOD", 72*time.Hour),
+		StarsPerUSD:       getfloat("STARS_PER_USD", 1),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -103,6 +105,15 @@ func getdur(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return fallback
+}
+
+func getfloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return fallback

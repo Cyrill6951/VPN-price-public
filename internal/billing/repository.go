@@ -84,16 +84,17 @@ func (r *Repository) CountRecentPendingOrders(ctx context.Context, userID uuid.U
 
 // NewOrder holds the fields needed to create an order.
 type NewOrder struct {
-	UserID    uuid.UUID
-	PlanID    uuid.UUID
-	CountryID uuid.UUID
-	Protocol  vpn.Protocol
-	Amount    float64
-	Discount  float64
-	Currency  string
-	Gateway   string
-	PromoID   *uuid.UUID
-	Label     *string
+	UserID              uuid.UUID
+	PlanID              uuid.UUID
+	CountryID           uuid.UUID
+	Protocol            vpn.Protocol
+	Amount              float64
+	Discount            float64
+	Currency            string
+	Gateway             string
+	PromoID             *uuid.UUID
+	Label               *string
+	RenewSubscriptionID *uuid.UUID
 }
 
 // CreateOrder inserts an order and redeems the promo (if any) atomically.
@@ -106,11 +107,11 @@ func (r *Repository) CreateOrder(ctx context.Context, in NewOrder) (Order, error
 
 	var o Order
 	err = tx.QueryRow(ctx, `
-		INSERT INTO orders (user_id, plan_id, country_id, protocol, amount, discount, currency, gateway, promo_id, label, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'wait_payment')
+		INSERT INTO orders (user_id, plan_id, country_id, protocol, amount, discount, currency, gateway, promo_id, label, renew_subscription_id, status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'wait_payment')
 		RETURNING id, user_id, plan_id, country_id, protocol, amount, discount, currency, gateway, status, created_at`,
 		in.UserID, in.PlanID, in.CountryID, string(in.Protocol), in.Amount, in.Discount,
-		in.Currency, in.Gateway, in.PromoID, in.Label).
+		in.Currency, in.Gateway, in.PromoID, in.Label, in.RenewSubscriptionID).
 		Scan(&o.ID, &o.UserID, &o.PlanID, &o.CountryID, &o.Protocol, &o.Amount, &o.Discount,
 			&o.Currency, &o.Gateway, &o.Status, &o.CreatedAt)
 	if err != nil {
@@ -164,19 +165,20 @@ func (r *Repository) CreatePayment(ctx context.Context, orderID uuid.UUID, gatew
 
 // OrderForProvision carries what is needed to issue a VPN for a paid order.
 type OrderForProvision struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	PlanID    uuid.UUID
-	CountryID uuid.UUID
-	Protocol  vpn.Protocol
-	Status    OrderStatus
-	Label     *string
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	PlanID     uuid.UUID
+	CountryID  uuid.UUID
+	Protocol   vpn.Protocol
+	Status     OrderStatus
+	Label      *string
+	RenewSubID *uuid.UUID
 }
 
 // GetOrderByExternalPayment resolves the order behind a gateway payment id.
 func (r *Repository) GetOrderByExternalPayment(ctx context.Context, gateway, externalID string) (OrderForProvision, error) {
 	return r.scanProvision(ctx, `
-		SELECT o.id, o.user_id, o.plan_id, o.country_id, o.protocol, o.status, o.label
+		SELECT o.id, o.user_id, o.plan_id, o.country_id, o.protocol, o.status, o.label, o.renew_subscription_id
 		FROM orders o JOIN payments p ON p.order_id = o.id
 		WHERE p.gateway = $1 AND p.external_id = $2`, gateway, externalID)
 }
@@ -184,14 +186,14 @@ func (r *Repository) GetOrderByExternalPayment(ctx context.Context, gateway, ext
 // GetOrderForProvision loads an order by id.
 func (r *Repository) GetOrderForProvision(ctx context.Context, orderID uuid.UUID) (OrderForProvision, error) {
 	return r.scanProvision(ctx, `
-		SELECT id, user_id, plan_id, country_id, protocol, status, label
+		SELECT id, user_id, plan_id, country_id, protocol, status, label, renew_subscription_id
 		FROM orders WHERE id = $1`, orderID)
 }
 
 func (r *Repository) scanProvision(ctx context.Context, q string, args ...any) (OrderForProvision, error) {
 	var o OrderForProvision
 	err := r.pool.QueryRow(ctx, q, args...).
-		Scan(&o.ID, &o.UserID, &o.PlanID, &o.CountryID, &o.Protocol, &o.Status, &o.Label)
+		Scan(&o.ID, &o.UserID, &o.PlanID, &o.CountryID, &o.Protocol, &o.Status, &o.Label, &o.RenewSubID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OrderForProvision{}, ErrOrderNotFound
 	}
@@ -199,6 +201,23 @@ func (r *Repository) scanProvision(ctx context.Context, q string, args ...any) (
 		return OrderForProvision{}, fmt.Errorf("get order: %w", err)
 	}
 	return o, nil
+}
+
+// ExtendSubscription pushes a subscription's expiry forward by the given days,
+// reactivating it, and returns the subscription id.
+func (r *Repository) ExtendSubscription(ctx context.Context, subID uuid.UUID, days int) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE subscriptions
+		SET expires_at = GREATEST(expires_at, now()) + make_interval(days => $2),
+		    status = 'active'
+		WHERE id = $1 AND status <> 'deleted'`, subID, days)
+	if err != nil {
+		return fmt.Errorf("extend subscription: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOrderNotFound
+	}
+	return nil
 }
 
 // ClaimForProvisioning atomically moves an order wait_payment -> processing so
@@ -317,6 +336,22 @@ func (r *Repository) MarkWebhookProcessed(ctx context.Context, gateway, external
 		`UPDATE webhook_events SET processed_at = now() WHERE gateway=$1 AND external_id=$2`,
 		gateway, externalID)
 	return err
+}
+
+// OrderSubscriptionID returns the subscription linked to an order (after fulfillment).
+func (r *Repository) OrderSubscriptionID(ctx context.Context, orderID uuid.UUID) (uuid.UUID, error) {
+	var sub *uuid.UUID
+	err := r.pool.QueryRow(ctx, `SELECT subscription_id FROM orders WHERE id = $1`, orderID).Scan(&sub)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrOrderNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("get order subscription: %w", err)
+	}
+	if sub == nil {
+		return uuid.Nil, nil
+	}
+	return *sub, nil
 }
 
 // ListOrders returns a user's orders, newest first.

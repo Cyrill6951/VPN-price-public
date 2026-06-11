@@ -48,6 +48,9 @@ type BuyInput struct {
 	Gateway   string
 	PromoCode string
 	Label     *string
+	// RenewSubscriptionID, when set, extends an existing subscription instead of
+	// provisioning a new VPN.
+	RenewSubscriptionID *uuid.UUID
 }
 
 // Buy creates an order and a gateway payment, returning where to pay.
@@ -83,6 +86,7 @@ func (s *Service) Buy(ctx context.Context, in BuyInput) (Order, Payment, error) 
 		UserID: in.UserID, PlanID: in.PlanID, CountryID: in.CountryID, Protocol: in.Protocol,
 		Amount: amount, Discount: round2(discount), Currency: plan.Currency,
 		Gateway: in.Gateway, PromoID: promoID, Label: in.Label,
+		RenewSubscriptionID: in.RenewSubscriptionID,
 	})
 	if err != nil {
 		return Order{}, Payment{}, err
@@ -152,7 +156,7 @@ func (s *Service) HandleWebhook(ctx context.Context, gateway string, headers htt
 
 	switch res.Status {
 	case PaymentSuccess:
-		if err := s.fulfill(ctx, order); err != nil {
+		if _, err := s.fulfill(ctx, order); err != nil {
 			return err
 		}
 	case PaymentFailed:
@@ -173,15 +177,43 @@ func (s *Service) resolveOrder(ctx context.Context, gateway string, res WebhookR
 	return s.repo.GetOrderByExternalPayment(ctx, gateway, res.ExternalID)
 }
 
-// fulfill provisions the VPN once and finalizes the order.
-func (s *Service) fulfill(ctx context.Context, order OrderForProvision) error {
+// FulfillOrder finalizes a paid order by id and returns the (new or renewed)
+// subscription id. Used by gateways that confirm payment out-of-band (e.g.
+// Telegram Stars via the bot).
+func (s *Service) FulfillOrder(ctx context.Context, orderID uuid.UUID) (uuid.UUID, error) {
+	order, err := s.repo.GetOrderForProvision(ctx, orderID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return s.fulfill(ctx, order)
+}
+
+// fulfill provisions (or renews) the VPN once and finalizes the order, returning
+// the subscription id. If the order was already fulfilled it returns the stored
+// subscription id with no error.
+func (s *Service) fulfill(ctx context.Context, order OrderForProvision) (uuid.UUID, error) {
 	claimed, err := s.repo.ClaimForProvisioning(ctx, order.ID)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 	if !claimed {
 		s.log.Info("order already fulfilled, skipping", "order", order.ID)
-		return nil
+		return s.repo.OrderSubscriptionID(ctx, order.ID)
+	}
+
+	if order.RenewSubID != nil {
+		plan, perr := s.repo.GetPlanPricing(ctx, order.PlanID)
+		if perr != nil {
+			return uuid.Nil, perr
+		}
+		if err := s.repo.ExtendSubscription(ctx, *order.RenewSubID, plan.Days); err != nil {
+			return uuid.Nil, fmt.Errorf("extend subscription: %w", err)
+		}
+		if err := s.repo.FinalizePaid(ctx, order.ID, *order.RenewSubID); err != nil {
+			return uuid.Nil, fmt.Errorf("finalize renewal: %w", err)
+		}
+		s.log.Info("subscription renewed", "order", order.ID, "subscription", *order.RenewSubID)
+		return *order.RenewSubID, nil
 	}
 
 	view, err := s.issuer.Create(ctx, vpn.CreateInput{
@@ -192,13 +224,13 @@ func (s *Service) fulfill(ctx context.Context, order OrderForProvision) error {
 		Label:     order.Label,
 	})
 	if err != nil {
-		return fmt.Errorf("provision vpn: %w", err)
+		return uuid.Nil, fmt.Errorf("provision vpn: %w", err)
 	}
 	if err := s.repo.FinalizePaid(ctx, order.ID, view.Subscription.ID); err != nil {
-		return fmt.Errorf("finalize order: %w", err)
+		return uuid.Nil, fmt.Errorf("finalize order: %w", err)
 	}
 	s.log.Info("order fulfilled", "order", order.ID, "subscription", view.Subscription.ID)
-	return nil
+	return view.Subscription.ID, nil
 }
 
 // ConfirmMock simulates a successful gateway callback for the mock provider.

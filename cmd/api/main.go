@@ -19,6 +19,7 @@ import (
 	"github.com/vpnsaas/platform/internal/platform/logger"
 	"github.com/vpnsaas/platform/internal/platform/observability"
 	"github.com/vpnsaas/platform/internal/platform/storage"
+	"github.com/vpnsaas/platform/internal/telegram"
 	"github.com/vpnsaas/platform/internal/user"
 	"github.com/vpnsaas/platform/internal/vpn"
 )
@@ -102,11 +103,20 @@ func run() error {
 	if cfg.CryptomusMerchant != "" && cfg.CryptomusAPIKey != "" {
 		providers["cryptomus"] = billing.NewCryptomusProvider(cfg.CryptomusMerchant, cfg.CryptomusAPIKey)
 	}
+	if cfg.TelegramBotToken != "" {
+		providers[billing.GatewayTelegramStars] = billing.NewStarsProvider()
+	}
 	billingSvc := billing.NewService(billing.NewRepository(db), vpnSvc, providers, cfg.PublicBaseURL, log)
 	billingHandler := billing.NewHandler(billingSvc, authMW, devMode)
 
 	// Background: expire overdue subscriptions after the grace period.
 	go billing.NewExpirer(db, cfg.GracePeriod, time.Minute, log).Run(ctx)
+
+	// Telegram bot (long polling) — only when a token is configured.
+	if cfg.TelegramBotToken != "" {
+		bot := telegram.NewBot(cfg.TelegramBotToken, rdb, authSvc, vpnSvc, billingSvc, cfg.StarsPerUSD, log)
+		go bot.Run(ctx)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", checker.Live)
