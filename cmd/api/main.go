@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/vpnsaas/platform/internal/auth"
+	"github.com/vpnsaas/platform/internal/billing"
 	"github.com/vpnsaas/platform/internal/platform/cache"
 	"github.com/vpnsaas/platform/internal/platform/config"
 	"github.com/vpnsaas/platform/internal/platform/database"
@@ -91,6 +93,21 @@ func run() error {
 	vpnSvc := vpn.NewService(vpn.NewRepository(db), objStore, vpnCipher, provisioner, log)
 	vpnHandler := vpn.NewHandler(vpnSvc, authMW)
 
+	// Billing module.
+	devMode := !cfg.IsProduction()
+	providers := map[string]billing.Provider{}
+	if devMode {
+		providers["mock"] = billing.NewMockProvider(cfg.PublicBaseURL)
+	}
+	if cfg.CryptomusMerchant != "" && cfg.CryptomusAPIKey != "" {
+		providers["cryptomus"] = billing.NewCryptomusProvider(cfg.CryptomusMerchant, cfg.CryptomusAPIKey)
+	}
+	billingSvc := billing.NewService(billing.NewRepository(db), vpnSvc, providers, cfg.PublicBaseURL, log)
+	billingHandler := billing.NewHandler(billingSvc, authMW, devMode)
+
+	// Background: expire overdue subscriptions after the grace period.
+	go billing.NewExpirer(db, cfg.GracePeriod, time.Minute, log).Run(ctx)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", checker.Live)
 	mux.HandleFunc("GET /ready", checker.Ready)
@@ -99,6 +116,7 @@ func run() error {
 	authHandler.RegisterRoutes(mux)
 	userHandler.RegisterRoutes(mux)
 	vpnHandler.RegisterRoutes(mux)
+	billingHandler.RegisterRoutes(mux)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestID,

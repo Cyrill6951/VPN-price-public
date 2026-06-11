@@ -36,6 +36,12 @@ type Config struct {
 	VPNConfigKeyHex       string // hex-encoded 32-byte AES key for config encryption
 	ProvisionerMode       string // noop | agent
 	ProvisionerAgentToken string // bearer token for the node agent (agent mode)
+
+	// Billing
+	PublicBaseURL     string        // externally reachable base URL (webhook callbacks)
+	CryptomusMerchant string        // Cryptomus merchant id (optional)
+	CryptomusAPIKey   string        // Cryptomus API key (optional)
+	GracePeriod       time.Duration // subscription grace period after expiry
 }
 
 // Load reads configuration from the environment, applying sane defaults.
@@ -64,6 +70,11 @@ func Load() (*Config, error) {
 			"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"),
 		ProvisionerMode:       getenv("PROVISIONER_MODE", "noop"),
 		ProvisionerAgentToken: os.Getenv("PROVISIONER_AGENT_TOKEN"),
+
+		PublicBaseURL:     getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
+		CryptomusMerchant: os.Getenv("CRYPTOMUS_MERCHANT"),
+		CryptomusAPIKey:   os.Getenv("CRYPTOMUS_API_KEY"),
+		GracePeriod:       getdur("GRACE_PERIOD", 72*time.Hour),
 	}
 
 	if cfg.DatabaseURL == "" {
