@@ -1,9 +1,11 @@
 // Command agent runs on a VPN node and applies peer/client changes requested by
 // the platform's provisioner (see internal/vpn/provisioner.go, "agent" mode).
 //
-// It manages WireGuard peers via the `wg` tool and, optionally, VLESS clients via
-// configurable Xray management commands. It is intended to be deployed by the
-// Ansible playbook in deploy/ansible and reached over a private network / TLS.
+// WireGuard peers are managed via the `wg` tool. VLESS clients are managed by
+// editing the Xray config's clients list and reloading Xray.
+//
+// It is intended to be deployed by the Ansible playbook in deploy/ansible and
+// reached over a private network / TLS.
 package main
 
 import (
@@ -14,13 +16,22 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
 type agent struct {
 	token       string
 	wgInterface string
-	log         *slog.Logger
+
+	// VLESS / Xray
+	xrayConfig string
+	xrayTag    string
+	xrayFlow   string
+	reloadCmd  string
+	xrayMu     sync.Mutex
+
+	log *slog.Logger
 }
 
 func main() {
@@ -29,6 +40,10 @@ func main() {
 	a := &agent{
 		token:       os.Getenv("AGENT_TOKEN"),
 		wgInterface: getenv("WG_INTERFACE", "wg0"),
+		xrayConfig:  getenv("XRAY_CONFIG", "/opt/vpn-node/xray.json"),
+		xrayTag:     getenv("XRAY_INBOUND_TAG", "vless-reality"),
+		xrayFlow:    getenv("XRAY_FLOW", "xtls-rprx-vision"),
+		reloadCmd:   getenv("XRAY_RELOAD_CMD", "docker restart vpn-node-xray-1"),
 		log:         log,
 	}
 	if a.token == "" {
@@ -47,7 +62,7 @@ func main() {
 	mux.Handle("POST /vless/clients/remove", a.auth(http.HandlerFunc(a.removeVLESS)))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	log.Info("agent listening", "addr", addr, "wg_interface", a.wgInterface)
+	log.Info("agent listening", "addr", addr, "wg_interface", a.wgInterface, "xray_tag", a.xrayTag)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Error("server stopped", "error", err)
 		os.Exit(1)
@@ -63,6 +78,8 @@ func (a *agent) auth(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// --- WireGuard ---
 
 func (a *agent) addWGPeer(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -114,36 +131,112 @@ func (a *agent) removeWGPeer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
-// addVLESS / removeVLESS shell out to configurable Xray management commands.
-// Set XRAY_ADD_CMD / XRAY_REMOVE_CMD to a template containing {uuid}; e.g. a
-// wrapper that calls the Xray gRPC HandlerService. Returns 501 if unconfigured.
+// --- VLESS (Xray) ---
+
 func (a *agent) addVLESS(w http.ResponseWriter, r *http.Request) {
-	a.vlessOp(w, r, os.Getenv("XRAY_ADD_CMD"))
-}
-
-func (a *agent) removeVLESS(w http.ResponseWriter, r *http.Request) {
-	a.vlessOp(w, r, os.Getenv("XRAY_REMOVE_CMD"))
-}
-
-func (a *agent) vlessOp(w http.ResponseWriter, r *http.Request, tmpl string) {
 	var req struct {
 		UUID string `json:"uuid"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	if tmpl == "" {
-		writeJSON(w, http.StatusNotImplemented,
-			map[string]string{"error": "VLESS management command not configured (set XRAY_ADD_CMD/XRAY_REMOVE_CMD)"})
+	if err := a.editVLESS(req.UUID, true); err != nil {
+		a.fail(w, "add vless client", err)
 		return
 	}
-	cmdline := strings.ReplaceAll(tmpl, "{uuid}", req.UUID)
-	if err := a.run("sh", "-c", cmdline); err != nil {
-		a.fail(w, "xray command", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
 }
+
+func (a *agent) removeVLESS(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UUID string `json:"uuid"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := a.editVLESS(req.UUID, false); err != nil {
+		a.fail(w, "remove vless client", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// editVLESS adds or removes a client UUID in the Xray config's target inbound and
+// reloads Xray. Access is serialised to avoid racing config writes.
+func (a *agent) editVLESS(uuid string, add bool) error {
+	if uuid == "" {
+		return fmt.Errorf("uuid is required")
+	}
+	a.xrayMu.Lock()
+	defer a.xrayMu.Unlock()
+
+	raw, err := os.ReadFile(a.xrayConfig)
+	if err != nil {
+		return fmt.Errorf("read xray config: %w", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return fmt.Errorf("parse xray config: %w", err)
+	}
+
+	settings, err := a.inboundSettings(cfg)
+	if err != nil {
+		return err
+	}
+
+	clients, _ := settings["clients"].([]any)
+	filtered := make([]any, 0, len(clients)+1)
+	exists := false
+	for _, c := range clients {
+		cm, ok := c.(map[string]any)
+		if ok && cm["id"] == uuid {
+			exists = true
+			if !add {
+				continue // drop on remove
+			}
+		}
+		filtered = append(filtered, c)
+	}
+	if add && !exists {
+		filtered = append(filtered, map[string]any{"id": uuid, "flow": a.xrayFlow})
+	}
+	settings["clients"] = filtered
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal xray config: %w", err)
+	}
+	if err := os.WriteFile(a.xrayConfig, out, 0o644); err != nil {
+		return fmt.Errorf("write xray config: %w", err)
+	}
+	if err := a.run("sh", "-c", a.reloadCmd); err != nil {
+		return fmt.Errorf("reload xray: %w", err)
+	}
+	return nil
+}
+
+// inboundSettings locates the settings object of the configured VLESS inbound.
+func (a *agent) inboundSettings(cfg map[string]any) (map[string]any, error) {
+	inbounds, ok := cfg["inbounds"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("xray config has no inbounds array")
+	}
+	for _, ib := range inbounds {
+		ibm, ok := ib.(map[string]any)
+		if !ok || ibm["tag"] != a.xrayTag {
+			continue
+		}
+		settings, ok := ibm["settings"].(map[string]any)
+		if !ok {
+			settings = map[string]any{}
+			ibm["settings"] = settings
+		}
+		return settings, nil
+	}
+	return nil, fmt.Errorf("inbound with tag %q not found", a.xrayTag)
+}
+
+// --- helpers ---
 
 func (a *agent) run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
