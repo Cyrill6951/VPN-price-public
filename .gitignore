@@ -1,0 +1,28 @@
+# Binaries
+/bin/
+*.exe
+*.out
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Go
+vendor/
+/coverage.out
+
+# Node / Next.js (web, admin)
+node_modules/
+.next/
+out/
+
+# Docker / data volumes
+/deploy/data/
+/.data/
+
+# IDE / OS
+.DS_Store
+.idea/
+*.log

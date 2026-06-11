@@ -1,0 +1,5 @@
+# OpenAPI Swagger placeholder
+openapi: 3.1.0
+info:
+  title: VPN SaaS API
+  version: 0.1.0
