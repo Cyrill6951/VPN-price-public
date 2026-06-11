@@ -1,0 +1,13 @@
+# Normalize line endings: store text as LF in the repo.
+* text=auto eol=lf
+
+# Explicitly LF for code and config.
+*.go    text eol=lf
+*.sql   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+Dockerfile* text eol=lf
+Makefile    text eol=lf
