@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/vpnsaas/platform/internal/auth"
 	"github.com/vpnsaas/platform/internal/platform/cache"
 	"github.com/vpnsaas/platform/internal/platform/config"
 	"github.com/vpnsaas/platform/internal/platform/database"
@@ -15,6 +16,7 @@ import (
 	"github.com/vpnsaas/platform/internal/platform/httpx"
 	"github.com/vpnsaas/platform/internal/platform/logger"
 	"github.com/vpnsaas/platform/internal/platform/observability"
+	"github.com/vpnsaas/platform/internal/user"
 )
 
 func main() {
@@ -55,10 +57,24 @@ func run() error {
 	metrics := observability.NewMetrics()
 	checker := health.New(db, rdb)
 
+	// Auth module.
+	tokenMgr := auth.NewTokenManager(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
+	authRepo := auth.NewRepository(db)
+	authSvc := auth.NewService(authRepo, tokenMgr, rdb, cfg.TelegramBotToken)
+	authMW := auth.NewMiddleware(authSvc)
+	authHandler := auth.NewHandler(authSvc, authMW)
+
+	// User module.
+	userRepo := user.NewRepository(db)
+	userHandler := user.NewHandler(userRepo, authMW)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", checker.Live)
 	mux.HandleFunc("GET /ready", checker.Ready)
 	mux.Handle("GET /metrics", metrics.Handler())
+
+	authHandler.RegisterRoutes(mux)
+	userHandler.RegisterRoutes(mux)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestID,

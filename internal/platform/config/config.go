@@ -18,6 +18,12 @@ type Config struct {
 	RedisURL    string // redis connection string
 
 	LogLevel string // debug | info | warn | error
+
+	// Auth
+	JWTSecret        string        // HMAC secret for access tokens
+	AccessTokenTTL   time.Duration // access token lifetime
+	RefreshTokenTTL  time.Duration // refresh token lifetime
+	TelegramBotToken string        // used to verify Telegram Login signatures
 }
 
 // Load reads configuration from the environment, applying sane defaults.
@@ -30,6 +36,11 @@ func Load() (*Config, error) {
 		DatabaseURL:     os.Getenv("DATABASE_URL"),
 		RedisURL:        os.Getenv("REDIS_URL"),
 		LogLevel:        getenv("LOG_LEVEL", "info"),
+
+		JWTSecret:        os.Getenv("JWT_SECRET"),
+		AccessTokenTTL:   getdur("JWT_ACCESS_TTL", 15*time.Minute),
+		RefreshTokenTTL:  getdur("JWT_REFRESH_TTL", 30*24*time.Hour),
+		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -37,6 +48,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.RedisURL == "" {
 		return nil, fmt.Errorf("config: REDIS_URL is required")
+	}
+	if cfg.JWTSecret == "" {
+		return nil, fmt.Errorf("config: JWT_SECRET is required")
 	}
 	return cfg, nil
 }

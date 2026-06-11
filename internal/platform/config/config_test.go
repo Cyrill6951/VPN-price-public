@@ -14,6 +14,7 @@ func TestLoad_RequiresDatabaseURL(t *testing.T) {
 func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/db")
 	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("JWT_SECRET", "test-secret")
 
 	cfg, err := Load()
 	if err != nil {
@@ -27,5 +28,8 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if cfg.IsProduction() {
 		t.Error("IsProduction() = true, want false for development")
+	}
+	if cfg.AccessTokenTTL == 0 || cfg.RefreshTokenTTL == 0 {
+		t.Error("token TTL defaults must be non-zero")
 	}
 }
