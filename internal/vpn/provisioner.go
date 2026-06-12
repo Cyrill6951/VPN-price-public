@@ -18,6 +18,8 @@ type Provisioner interface {
 	RemoveWireGuardPeer(ctx context.Context, srv Server, publicKey string) error
 	AddVLESSClient(ctx context.Context, srv Server, clientUUID string) error
 	RemoveVLESSClient(ctx context.Context, srv Server, clientUUID string) error
+	AddShadowsocksClient(ctx context.Context, srv Server, userKey, email string) error
+	RemoveShadowsocksClient(ctx context.Context, srv Server, email string) error
 }
 
 // NewProvisioner returns the provisioner selected by mode ("noop" or "agent").
@@ -54,6 +56,14 @@ func (p *noopProvisioner) RemoveVLESSClient(_ context.Context, srv Server, clien
 	p.log.Info("noop: remove vless client", "server", srv.ID, "uuid", clientUUID)
 	return nil
 }
+func (p *noopProvisioner) AddShadowsocksClient(_ context.Context, srv Server, _, email string) error {
+	p.log.Info("noop: add shadowsocks client", "server", srv.ID, "email", email)
+	return nil
+}
+func (p *noopProvisioner) RemoveShadowsocksClient(_ context.Context, srv Server, email string) error {
+	p.log.Info("noop: remove shadowsocks client", "server", srv.ID, "email", email)
+	return nil
+}
 
 // agentProvisioner talks to the node agent (see cmd/agent) over HTTP.
 type agentProvisioner struct {
@@ -75,6 +85,12 @@ func (p *agentProvisioner) AddVLESSClient(ctx context.Context, srv Server, clien
 }
 func (p *agentProvisioner) RemoveVLESSClient(ctx context.Context, srv Server, clientUUID string) error {
 	return p.post(ctx, srv, "/vless/clients/remove", map[string]string{"uuid": clientUUID})
+}
+func (p *agentProvisioner) AddShadowsocksClient(ctx context.Context, srv Server, userKey, email string) error {
+	return p.post(ctx, srv, "/ss/clients", map[string]string{"password": userKey, "email": email})
+}
+func (p *agentProvisioner) RemoveShadowsocksClient(ctx context.Context, srv Server, email string) error {
+	return p.post(ctx, srv, "/ss/clients/remove", map[string]string{"email": email})
 }
 
 func (p *agentProvisioner) post(ctx context.Context, srv Server, path string, payload any) error {

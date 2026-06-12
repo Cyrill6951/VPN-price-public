@@ -54,7 +54,8 @@ field() { echo "$KEYS" | grep -o "\"$1\": *\"[^\"]*\"" | cut -d'"' -f4; }
 WG_PRIV="$(field wg_private_key)";   WG_PUB="$(field wg_public_key)"
 R_PRIV="$(field reality_private_key)"; R_PUB="$(field reality_public_key)"
 SID="$(field reality_short_id)"
-[ -n "$WG_PUB" ] && [ -n "$R_PUB" ] || die "key generation failed"
+SS_KEY="$(field ss_server_key)"
+[ -n "$WG_PUB" ] && [ -n "$R_PUB" ] && [ -n "$SS_KEY" ] || die "key generation failed"
 
 echo ">> installing SSH key and detecting WAN interface…"
 WANIF="$(docker run --rm -e SSHPASS="$NODE_PW" -v "$MOUNT:/src" -w /src alpine:3.20 sh -s <<NODEPREP
@@ -94,6 +95,9 @@ reality_short_id=$SID
 reality_sni=www.microsoft.com
 reality_dest=www.microsoft.com:443
 reality_port=443
+ss_port=8388
+ss_method=2022-blake3-aes-128-gcm
+ss_server_key=$SS_KEY
 agent_port=8090
 agent_token=$AGENT_TOKEN
 INVENTORY
@@ -117,10 +121,12 @@ ON CONFLICT (iso) DO UPDATE SET name = EXCLUDED.name, enabled = true;
 INSERT INTO servers (
   country_id, provider, hostname, public_host, agent_url, status, priority, capacity,
   wg_port, wg_public_key, wg_subnet, wg_dns,
-  reality_port, reality_public_key, reality_sni, reality_short_id, reality_dest)
+  reality_port, reality_public_key, reality_sni, reality_short_id, reality_dest,
+  ss_port, ss_method, ss_server_key)
 SELECT c.id, 'manual', '$HOSTNAME_TAG', '$HOST', 'http://$HOST:8090', 'active', 10, 1000,
   51820, '$WG_PUB', '$WG_SUBNET', '1.1.1.1',
-  443, '$R_PUB', 'www.microsoft.com', '$SID', 'www.microsoft.com:443'
+  443, '$R_PUB', 'www.microsoft.com', '$SID', 'www.microsoft.com:443',
+  8388, '2022-blake3-aes-128-gcm', '$SS_KEY'
 FROM countries c WHERE c.iso = '$ISO';
 SQL
 

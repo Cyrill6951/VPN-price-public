@@ -119,17 +119,23 @@ func ensureServer(ctx context.Context, pool *pgxpool.Pool, countryID uuid.UUID, 
 	if err != nil {
 		return err
 	}
+	ssKey, err := vpn.GenerateShadowsocksKey()
+	if err != nil {
+		return err
+	}
 
 	_, err = pool.Exec(ctx, `
 		INSERT INTO servers (
 			country_id, provider, hostname, public_host, status, priority, capacity,
 			wg_port, wg_public_key, wg_subnet, wg_dns,
-			reality_port, reality_public_key, reality_sni, reality_short_id, reality_dest
+			reality_port, reality_public_key, reality_sni, reality_short_id, reality_dest,
+			ss_port, ss_method, ss_server_key
 		) VALUES (
 			$1, 'dev', 'de-dev-01', $2, 'active', 10, 1000,
 			51820, $3, '10.7.0.0/24', '1.1.1.1',
-			443, $4, 'www.microsoft.com', $5, 'www.microsoft.com:443'
-		)`, countryID, host, wgPub, realPub, shortID)
+			443, $4, 'www.microsoft.com', $5, 'www.microsoft.com:443',
+			8388, '2022-blake3-aes-128-gcm', $6
+		)`, countryID, host, wgPub, realPub, shortID, ssKey)
 	if err != nil {
 		return err
 	}

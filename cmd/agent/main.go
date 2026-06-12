@@ -28,6 +28,7 @@ type agent struct {
 	xrayConfig string
 	xrayTag    string
 	xrayFlow   string
+	xraySSTag  string
 	reloadCmd  string
 	xrayMu     sync.Mutex
 
@@ -43,6 +44,7 @@ func main() {
 		xrayConfig:  getenv("XRAY_CONFIG", "/opt/vpn-node/xray.json"),
 		xrayTag:     getenv("XRAY_INBOUND_TAG", "vless-reality"),
 		xrayFlow:    getenv("XRAY_FLOW", "xtls-rprx-vision"),
+		xraySSTag:   getenv("XRAY_SS_INBOUND_TAG", "shadowsocks"),
 		reloadCmd:   getenv("XRAY_RELOAD_CMD", "docker restart vpn-node-xray-1"),
 		log:         log,
 	}
@@ -60,6 +62,8 @@ func main() {
 	mux.Handle("POST /wg/peers/remove", a.auth(http.HandlerFunc(a.removeWGPeer)))
 	mux.Handle("POST /vless/clients", a.auth(http.HandlerFunc(a.addVLESS)))
 	mux.Handle("POST /vless/clients/remove", a.auth(http.HandlerFunc(a.removeVLESS)))
+	mux.Handle("POST /ss/clients", a.auth(http.HandlerFunc(a.addSS)))
+	mux.Handle("POST /ss/clients/remove", a.auth(http.HandlerFunc(a.removeSS)))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Info("agent listening", "addr", addr, "wg_interface", a.wgInterface, "xray_tag", a.xrayTag)
@@ -161,11 +165,49 @@ func (a *agent) removeVLESS(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
-// editVLESS adds or removes a client UUID in the Xray config's target inbound and
-// reloads Xray. Access is serialised to avoid racing config writes.
 func (a *agent) editVLESS(uuid string, add bool) error {
 	if uuid == "" {
 		return fmt.Errorf("uuid is required")
+	}
+	return a.editXrayClients(a.xrayTag, "id", uuid, add, map[string]any{"id": uuid, "flow": a.xrayFlow})
+}
+
+// addSS / removeSS manage Shadowsocks-2022 per-user keys on the SS inbound.
+func (a *agent) addSS(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := a.editXrayClients(a.xraySSTag, "email", req.Email, true,
+		map[string]any{"password": req.Password, "email": req.Email}); err != nil {
+		a.fail(w, "add ss client", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
+}
+
+func (a *agent) removeSS(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := a.editXrayClients(a.xraySSTag, "email", req.Email, false, nil); err != nil {
+		a.fail(w, "remove ss client", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// editXrayClients adds or removes a client (matched by matchField==matchValue) in
+// the given inbound's clients list and reloads Xray. Serialised against races.
+func (a *agent) editXrayClients(tag, matchField, matchValue string, add bool, newClient map[string]any) error {
+	if matchValue == "" {
+		return fmt.Errorf("%s is required", matchField)
 	}
 	a.xrayMu.Lock()
 	defer a.xrayMu.Unlock()
@@ -179,7 +221,7 @@ func (a *agent) editVLESS(uuid string, add bool) error {
 		return fmt.Errorf("parse xray config: %w", err)
 	}
 
-	settings, err := a.inboundSettings(cfg)
+	settings, err := a.inboundSettings(cfg, tag)
 	if err != nil {
 		return err
 	}
@@ -189,16 +231,16 @@ func (a *agent) editVLESS(uuid string, add bool) error {
 	exists := false
 	for _, c := range clients {
 		cm, ok := c.(map[string]any)
-		if ok && cm["id"] == uuid {
+		if ok && cm[matchField] == matchValue {
 			exists = true
 			if !add {
-				continue // drop on remove
+				continue
 			}
 		}
 		filtered = append(filtered, c)
 	}
 	if add && !exists {
-		filtered = append(filtered, map[string]any{"id": uuid, "flow": a.xrayFlow})
+		filtered = append(filtered, newClient)
 	}
 	settings["clients"] = filtered
 
@@ -215,15 +257,15 @@ func (a *agent) editVLESS(uuid string, add bool) error {
 	return nil
 }
 
-// inboundSettings locates the settings object of the configured VLESS inbound.
-func (a *agent) inboundSettings(cfg map[string]any) (map[string]any, error) {
+// inboundSettings locates the settings object of the inbound with the given tag.
+func (a *agent) inboundSettings(cfg map[string]any, tag string) (map[string]any, error) {
 	inbounds, ok := cfg["inbounds"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("xray config has no inbounds array")
 	}
 	for _, ib := range inbounds {
 		ibm, ok := ib.(map[string]any)
-		if !ok || ibm["tag"] != a.xrayTag {
+		if !ok || ibm["tag"] != tag {
 			continue
 		}
 		settings, ok := ibm["settings"].(map[string]any)
@@ -233,7 +275,7 @@ func (a *agent) inboundSettings(cfg map[string]any) (map[string]any, error) {
 		}
 		return settings, nil
 	}
-	return nil, fmt.Errorf("inbound with tag %q not found", a.xrayTag)
+	return nil, fmt.Errorf("inbound with tag %q not found", tag)
 }
 
 // --- helpers ---

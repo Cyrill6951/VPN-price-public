@@ -133,6 +133,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (VPNView, error) {
 		}
 		params.PSKEnc = &enc
 	}
+	if gen.ssUserKey != nil {
+		enc, encErr := s.cipher.Encrypt([]byte(*gen.ssUserKey))
+		if encErr != nil {
+			return VPNView{}, encErr
+		}
+		params.PrivateKeyEnc = &enc
+	}
 
 	sub, cfg, err := s.repo.Persist(ctx, params, configID)
 	if err != nil {
@@ -148,9 +155,37 @@ func (s *Service) generate(ctx context.Context, srv Server, protocol Protocol, l
 		return s.generateWireGuard(ctx, srv, routing)
 	case ProtocolVLESSReality:
 		return s.generateReality(srv, label)
+	case ProtocolShadowsocks:
+		return s.generateShadowsocks(srv, label)
 	default:
 		return generated{}, ErrUnsupportedProtocol
 	}
+}
+
+func (s *Service) generateShadowsocks(srv Server, label string) (generated, error) {
+	if srv.SSPort == nil || srv.SSMethod == nil || srv.SSServerKey == nil {
+		return generated{}, ErrServerNotConfigured
+	}
+	userKey, err := GenerateShadowsocksKey()
+	if err != nil {
+		return generated{}, err
+	}
+	email := NewUUID()
+	uri := renderShadowsocksURI(ssParams{
+		Method:    *srv.SSMethod,
+		ServerKey: *srv.SSServerKey,
+		UserKey:   userKey,
+		Host:      srv.PublicHost,
+		Port:      *srv.SSPort,
+		Label:     label,
+	})
+	return generated{
+		uri:        uri,
+		configText: uri,
+		hash:       sha256hex(uri),
+		clientUUID: &email,
+		ssUserKey:  &userKey,
+	}, nil
 }
 
 func (s *Service) generateWireGuard(ctx context.Context, srv Server, routing RoutingMode) (generated, error) {
@@ -238,6 +273,8 @@ func (s *Service) provision(ctx context.Context, srv Server, protocol Protocol, 
 		return s.provisioner.AddWireGuardPeer(ctx, srv, derefStr(gen.publicKey), psk, allowed)
 	case ProtocolVLESSReality:
 		return s.provisioner.AddVLESSClient(ctx, srv, derefStr(gen.clientUUID))
+	case ProtocolShadowsocks:
+		return s.provisioner.AddShadowsocksClient(ctx, srv, derefStr(gen.ssUserKey), derefStr(gen.clientUUID))
 	default:
 		return ErrUnsupportedProtocol
 	}
@@ -294,6 +331,12 @@ func (s *Service) Delete(ctx context.Context, userID, subscriptionID uuid.UUID) 
 		if del.ClientUUID != nil {
 			if err := s.provisioner.RemoveVLESSClient(ctx, del.Server, *del.ClientUUID); err != nil {
 				s.log.Warn("deprovision vless client failed", "error", err)
+			}
+		}
+	case ProtocolShadowsocks:
+		if del.ClientUUID != nil {
+			if err := s.provisioner.RemoveShadowsocksClient(ctx, del.Server, *del.ClientUUID); err != nil {
+				s.log.Warn("deprovision shadowsocks client failed", "error", err)
 			}
 		}
 	}

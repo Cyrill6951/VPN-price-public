@@ -25,6 +25,18 @@
       }
     },
     {
+      "tag": "shadowsocks",
+      "listen": "0.0.0.0",
+      "port": {{ ss_port | default(8388) }},
+      "protocol": "shadowsocks",
+      "settings": {
+        "method": "{{ ss_method | default('2022-blake3-aes-128-gcm') }}",
+        "password": "{{ ss_server_key }}",
+        "clients": [],
+        "network": "tcp,udp"
+      }
+    },
+    {
       "tag": "api",
       "listen": "127.0.0.1",
       "port": 10085,

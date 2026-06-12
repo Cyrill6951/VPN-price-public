@@ -60,6 +60,16 @@ func GeneratePresharedKey() (string, error) {
 	return base64.StdEncoding.EncodeToString(b), nil
 }
 
+// GenerateShadowsocksKey returns a base64 (std) 16-byte key suitable for the
+// 2022-blake3-aes-128-gcm cipher (server PSK or per-user PSK).
+func GenerateShadowsocksKey() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("read random: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
+}
+
 // NewUUID returns a random UUID string (VLESS client id).
 func NewUUID() string { return uuid.NewString() }
 

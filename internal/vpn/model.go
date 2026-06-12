@@ -15,11 +15,12 @@ type Protocol string
 const (
 	ProtocolWireGuard    Protocol = "wireguard"
 	ProtocolVLESSReality Protocol = "vless_reality"
+	ProtocolShadowsocks  Protocol = "shadowsocks"
 )
 
 // Valid reports whether p is a supported protocol.
 func (p Protocol) Valid() bool {
-	return p == ProtocolWireGuard || p == ProtocolVLESSReality
+	return p == ProtocolWireGuard || p == ProtocolVLESSReality || p == ProtocolShadowsocks
 }
 
 // Server is a VPN node with its protocol parameters.
@@ -40,6 +41,10 @@ type Server struct {
 	RealitySNI       *string
 	RealityShortID   *string
 	RealityDest      *string
+
+	SSPort      *int
+	SSMethod    *string
+	SSServerKey *string
 }
 
 // Plan is a purchasable tariff.
@@ -90,8 +95,9 @@ type generated struct {
 	privateKey *string // WireGuard client private (plaintext, encrypted before store)
 	publicKey  *string // WireGuard client public
 	psk        *string // preshared key (plaintext)
-	clientUUID *string // VLESS client uuid
+	clientUUID *string // VLESS client uuid / Shadowsocks client email
 	assignedIP *string // WireGuard client address
+	ssUserKey  *string // Shadowsocks per-user PSK (plaintext)
 }
 
 // Domain errors.

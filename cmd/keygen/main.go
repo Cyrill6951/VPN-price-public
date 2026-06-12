@@ -23,6 +23,10 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	ssKey, err := vpn.GenerateShadowsocksKey()
+	if err != nil {
+		fail(err)
+	}
 
 	out := map[string]string{
 		"wg_private_key":      wgPriv,
@@ -30,6 +34,7 @@ func main() {
 		"reality_private_key": rPriv,
 		"reality_public_key":  rPub,
 		"reality_short_id":    sid,
+		"ss_server_key":       ssKey,
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

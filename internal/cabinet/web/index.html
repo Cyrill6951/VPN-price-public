@@ -112,7 +112,8 @@ const R={
       '<label class="muted">Протокол</label><select id="bpr" onchange="togRoute()">'+
         '<option value="wireguard">WireGuard (весь трафик)</option>'+
         '<option value="wireguard_split">WireGuard 🇷🇺 (РФ-ресурсы напрямую)</option>'+
-        '<option value="vless_reality">VLESS · Reality</option></select>'+
+        '<option value="vless_reality">VLESS · Reality</option>'+
+        '<option value="shadowsocks">Shadowsocks</option></select>'+
       '<label class="muted">Тариф</label><select id="bpl">'+opts(pl.plans)+'</select>'+
       '<div class="row" style="margin-top:10px"><button onclick="buy()">Оформить</button>'+
       '<span class="muted">шлюз: '+esc((gw.gateways[0]||"—"))+'</span></div>'+
