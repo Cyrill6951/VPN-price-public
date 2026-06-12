@@ -67,7 +67,14 @@ func (b *Bot) handleCallback(ctx context.Context, cq *CallbackQuery) {
 		b.editKB(ctx, chatID, msgID, textChooseProtocol, protocolsKeyboard())
 	case strings.HasPrefix(data, "proto:"):
 		d, _ := b.getDraft(ctx, chatID)
-		d.Protocol = strings.TrimPrefix(data, "proto:")
+		switch strings.TrimPrefix(data, "proto:") {
+		case "wireguard_split":
+			d.Protocol = "wireguard"
+			d.Routing = string(vpn.RoutingSplitRU)
+		default:
+			d.Protocol = strings.TrimPrefix(data, "proto:")
+			d.Routing = string(vpn.RoutingFull)
+		}
 		_ = b.saveDraft(ctx, chatID, d)
 		b.editPlans(ctx, chatID, msgID)
 	case strings.HasPrefix(data, "plan:"):
@@ -155,6 +162,7 @@ func (b *Bot) pay(ctx context.Context, chatID int64, user auth.User) {
 		CountryID: countryID,
 		Protocol:  vpn.Protocol(d.Protocol),
 		Gateway:   billing.GatewayTelegramStars,
+		Routing:   vpn.RoutingMode(d.Routing),
 	}
 	if d.RenewSubID != "" {
 		if sub, err := uuid.Parse(d.RenewSubID); err == nil {

@@ -3,10 +3,48 @@ package vpn
 import (
 	"encoding/base64"
 	"errors"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
 )
+
+func allowedContains(t *testing.T, allowed, ipStr string) bool {
+	t.Helper()
+	ip := net.ParseIP(ipStr)
+	for _, c := range strings.Split(allowed, ", ") {
+		_, n, err := net.ParseCIDR(strings.TrimSpace(c))
+		if err == nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSplitRouting_RU(t *testing.T) {
+	allowed := allowedIPsFor(RoutingSplitRU)
+	if allowed == "" || allowed == fullAllowedIPs {
+		t.Fatal("split routing produced no exclusions")
+	}
+	// A Russian address (inside 2.56.24.0/22) must NOT be tunneled.
+	if allowedContains(t, allowed, "2.56.24.5") {
+		t.Error("Russian IP should be excluded from the tunnel (route direct)")
+	}
+	// A private address must NOT be tunneled.
+	if allowedContains(t, allowed, "10.1.2.3") {
+		t.Error("private IP should be excluded from the tunnel")
+	}
+	// A non-Russian public address (Google DNS) MUST be tunneled.
+	if !allowedContains(t, allowed, "8.8.8.8") {
+		t.Error("non-Russian IP should be routed through the tunnel")
+	}
+}
+
+func TestRoutingFull(t *testing.T) {
+	if allowedIPsFor(RoutingFull) != fullAllowedIPs {
+		t.Errorf("full routing = %q, want %q", allowedIPsFor(RoutingFull), fullAllowedIPs)
+	}
+}
 
 func TestGenerateWireGuardKeypair(t *testing.T) {
 	priv, pub, err := GenerateWireGuardKeypair()

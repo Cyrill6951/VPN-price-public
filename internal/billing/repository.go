@@ -95,6 +95,7 @@ type NewOrder struct {
 	PromoID             *uuid.UUID
 	Label               *string
 	RenewSubscriptionID *uuid.UUID
+	Routing             string
 }
 
 // CreateOrder inserts an order and redeems the promo (if any) atomically.
@@ -106,12 +107,16 @@ func (r *Repository) CreateOrder(ctx context.Context, in NewOrder) (Order, error
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var o Order
+	routing := in.Routing
+	if routing == "" {
+		routing = "full"
+	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO orders (user_id, plan_id, country_id, protocol, amount, discount, currency, gateway, promo_id, label, renew_subscription_id, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'wait_payment')
+		INSERT INTO orders (user_id, plan_id, country_id, protocol, amount, discount, currency, gateway, promo_id, label, renew_subscription_id, routing, status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'wait_payment')
 		RETURNING id, user_id, plan_id, country_id, protocol, amount, discount, currency, gateway, status, created_at`,
 		in.UserID, in.PlanID, in.CountryID, string(in.Protocol), in.Amount, in.Discount,
-		in.Currency, in.Gateway, in.PromoID, in.Label, in.RenewSubscriptionID).
+		in.Currency, in.Gateway, in.PromoID, in.Label, in.RenewSubscriptionID, routing).
 		Scan(&o.ID, &o.UserID, &o.PlanID, &o.CountryID, &o.Protocol, &o.Amount, &o.Discount,
 			&o.Currency, &o.Gateway, &o.Status, &o.CreatedAt)
 	if err != nil {
@@ -173,12 +178,13 @@ type OrderForProvision struct {
 	Status     OrderStatus
 	Label      *string
 	RenewSubID *uuid.UUID
+	Routing    string
 }
 
 // GetOrderByExternalPayment resolves the order behind a gateway payment id.
 func (r *Repository) GetOrderByExternalPayment(ctx context.Context, gateway, externalID string) (OrderForProvision, error) {
 	return r.scanProvision(ctx, `
-		SELECT o.id, o.user_id, o.plan_id, o.country_id, o.protocol, o.status, o.label, o.renew_subscription_id
+		SELECT o.id, o.user_id, o.plan_id, o.country_id, o.protocol, o.status, o.label, o.renew_subscription_id, o.routing
 		FROM orders o JOIN payments p ON p.order_id = o.id
 		WHERE p.gateway = $1 AND p.external_id = $2`, gateway, externalID)
 }
@@ -186,14 +192,14 @@ func (r *Repository) GetOrderByExternalPayment(ctx context.Context, gateway, ext
 // GetOrderForProvision loads an order by id.
 func (r *Repository) GetOrderForProvision(ctx context.Context, orderID uuid.UUID) (OrderForProvision, error) {
 	return r.scanProvision(ctx, `
-		SELECT id, user_id, plan_id, country_id, protocol, status, label, renew_subscription_id
+		SELECT id, user_id, plan_id, country_id, protocol, status, label, renew_subscription_id, routing
 		FROM orders WHERE id = $1`, orderID)
 }
 
 func (r *Repository) scanProvision(ctx context.Context, q string, args ...any) (OrderForProvision, error) {
 	var o OrderForProvision
 	err := r.pool.QueryRow(ctx, q, args...).
-		Scan(&o.ID, &o.UserID, &o.PlanID, &o.CountryID, &o.Protocol, &o.Status, &o.Label, &o.RenewSubID)
+		Scan(&o.ID, &o.UserID, &o.PlanID, &o.CountryID, &o.Protocol, &o.Status, &o.Label, &o.RenewSubID, &o.Routing)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OrderForProvision{}, ErrOrderNotFound
 	}

@@ -15,6 +15,7 @@ type wgParams struct {
 	ServerPublicKey  string
 	PresharedKey     string
 	Endpoint         string // host:port
+	AllowedIPs       string // routed networks (full tunnel or split)
 }
 
 // renderWireGuardConfig produces a standard WireGuard .conf for the client.
@@ -31,7 +32,11 @@ func renderWireGuardConfig(p wgParams) string {
 	if p.PresharedKey != "" {
 		fmt.Fprintf(&b, "PresharedKey = %s\n", p.PresharedKey)
 	}
-	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
+	allowed := p.AllowedIPs
+	if allowed == "" {
+		allowed = fullAllowedIPs
+	}
+	fmt.Fprintf(&b, "AllowedIPs = %s\n", allowed)
 	fmt.Fprintf(&b, "Endpoint = %s\n", p.Endpoint)
 	b.WriteString("PersistentKeepalive = 25\n")
 	return b.String()

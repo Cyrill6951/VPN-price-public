@@ -36,7 +36,8 @@ func countriesKeyboard(countries []vpn.CountryRef) *InlineKeyboardMarkup {
 
 func protocolsKeyboard() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{{Text: "WireGuard", CallbackData: "proto:wireguard"}},
+		{{Text: "WireGuard (весь трафик)", CallbackData: "proto:wireguard"}},
+		{{Text: "WireGuard 🇷🇺 (РФ-ресурсы напрямую)", CallbackData: "proto:wireguard_split"}},
 		{{Text: "VLESS · Reality", CallbackData: "proto:vless_reality"}},
 		backToMenuRow(),
 	}}

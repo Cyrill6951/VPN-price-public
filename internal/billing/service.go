@@ -51,6 +51,8 @@ type BuyInput struct {
 	// RenewSubscriptionID, when set, extends an existing subscription instead of
 	// provisioning a new VPN.
 	RenewSubscriptionID *uuid.UUID
+	// Routing is the WireGuard routing mode (full | split_ru).
+	Routing vpn.RoutingMode
 }
 
 // Buy creates an order and a gateway payment, returning where to pay.
@@ -87,6 +89,7 @@ func (s *Service) Buy(ctx context.Context, in BuyInput) (Order, Payment, error) 
 		Amount: amount, Discount: round2(discount), Currency: plan.Currency,
 		Gateway: in.Gateway, PromoID: promoID, Label: in.Label,
 		RenewSubscriptionID: in.RenewSubscriptionID,
+		Routing:             string(in.Routing),
 	})
 	if err != nil {
 		return Order{}, Payment{}, err
@@ -222,6 +225,7 @@ func (s *Service) fulfill(ctx context.Context, order OrderForProvision) (uuid.UU
 		Protocol:  order.Protocol,
 		PlanID:    &order.PlanID,
 		Label:     order.Label,
+		Routing:   vpn.RoutingMode(order.Routing),
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("provision vpn: %w", err)

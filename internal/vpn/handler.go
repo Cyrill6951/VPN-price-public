@@ -59,6 +59,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		Protocol  string  `json:"protocol"`
 		PlanID    *string `json:"plan_id"`
 		Label     *string `json:"label"`
+		Routing   string  `json:"routing"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -68,11 +69,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid country_id")
 		return
 	}
+	routing := RoutingMode(req.Routing)
+	if !routing.Valid() {
+		routing = RoutingFull
+	}
 	in := CreateInput{
 		UserID:    p.UserID,
 		CountryID: countryID,
 		Protocol:  Protocol(req.Protocol),
 		Label:     req.Label,
+		Routing:   routing,
 	}
 	if req.PlanID != nil {
 		planID, perr := uuid.Parse(*req.PlanID)

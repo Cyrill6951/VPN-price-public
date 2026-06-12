@@ -35,6 +35,9 @@ type CreateInput struct {
 	Protocol  Protocol
 	PlanID    *uuid.UUID
 	Label     *string
+	// Routing selects full tunnel (default) or split (RU resources direct).
+	// Applies to WireGuard only.
+	Routing RoutingMode
 }
 
 // Create selects a server, generates the config, provisions the node and persists everything.
@@ -63,7 +66,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (VPNView, error) {
 		label = *in.Label
 	}
 
-	gen, err := s.generate(ctx, srv, in.Protocol, label)
+	gen, err := s.generate(ctx, srv, in.Protocol, label, in.Routing)
 	if err != nil {
 		return VPNView{}, err
 	}
@@ -74,7 +77,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (VPNView, error) {
 	}
 
 	cfgKey := "cfg/" + configID.String()
-	qrKey := "qr/" + configID.String() + ".png"
 
 	encConfig, err := s.cipher.Encrypt([]byte(gen.configText))
 	if err != nil {
@@ -83,16 +85,21 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (VPNView, error) {
 	if err := s.store.Put(ctx, cfgKey, []byte(encConfig), "application/octet-stream"); err != nil {
 		return VPNView{}, err
 	}
+
+	// QR is best-effort: split-tunnel WireGuard configs exceed the QR capacity,
+	// so large configs are delivered as a file instead of failing the purchase.
+	qrKey := ""
 	qrContent := gen.uri
 	if qrContent == "" {
 		qrContent = gen.configText
 	}
-	png, err := renderQRPNG(qrContent, 512)
-	if err != nil {
-		return VPNView{}, err
-	}
-	if err := s.store.Put(ctx, qrKey, png, "image/png"); err != nil {
-		return VPNView{}, err
+	if png, qrErr := renderQRPNG(qrContent, 512); qrErr == nil {
+		qrKey = "qr/" + configID.String() + ".png"
+		if err := s.store.Put(ctx, qrKey, png, "image/png"); err != nil {
+			return VPNView{}, err
+		}
+	} else {
+		s.log.Info("skipping QR (config too large)", "bytes", len(qrContent))
 	}
 
 	params := CreateParams{
@@ -135,10 +142,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (VPNView, error) {
 }
 
 // generate produces protocol-specific material and the rendered config.
-func (s *Service) generate(ctx context.Context, srv Server, protocol Protocol, label string) (generated, error) {
+func (s *Service) generate(ctx context.Context, srv Server, protocol Protocol, label string, routing RoutingMode) (generated, error) {
 	switch protocol {
 	case ProtocolWireGuard:
-		return s.generateWireGuard(ctx, srv, label)
+		return s.generateWireGuard(ctx, srv, routing)
 	case ProtocolVLESSReality:
 		return s.generateReality(srv, label)
 	default:
@@ -146,7 +153,7 @@ func (s *Service) generate(ctx context.Context, srv Server, protocol Protocol, l
 	}
 }
 
-func (s *Service) generateWireGuard(ctx context.Context, srv Server, _ string) (generated, error) {
+func (s *Service) generateWireGuard(ctx context.Context, srv Server, routing RoutingMode) (generated, error) {
 	if srv.WGPublicKey == nil || srv.WGSubnet == nil || srv.WGPort == nil {
 		return generated{}, ErrServerNotConfigured
 	}
@@ -177,6 +184,7 @@ func (s *Service) generateWireGuard(ctx context.Context, srv Server, _ string) (
 		ServerPublicKey:  *srv.WGPublicKey,
 		PresharedKey:     psk,
 		Endpoint:         fmt.Sprintf("%s:%d", srv.PublicHost, *srv.WGPort),
+		AllowedIPs:       allowedIPsFor(routing),
 	})
 	ipHost := strings.TrimSuffix(ip, "/32")
 	return generated{
@@ -262,6 +270,9 @@ func (s *Service) FetchQR(ctx context.Context, userID, subscriptionID uuid.UUID)
 	art, err := s.repo.GetArtifactForUser(ctx, userID, subscriptionID)
 	if err != nil {
 		return nil, err
+	}
+	if art.QRObjectKey == "" {
+		return nil, ErrNotFound // e.g. split-tunnel config too large for a QR
 	}
 	return s.store.Get(ctx, art.QRObjectKey)
 }

@@ -14,6 +14,7 @@ import (
 type draft struct {
 	CountryID  string `json:"country_id,omitempty"`
 	Protocol   string `json:"protocol,omitempty"`
+	Routing    string `json:"routing,omitempty"`
 	PlanID     string `json:"plan_id,omitempty"`
 	RenewSubID string `json:"renew_sub_id,omitempty"`
 }
