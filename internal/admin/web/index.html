@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN · Admin</title>
+<style>
+  :root{--bg:#050816;--card:#0f172a;--border:#334155;--fg:#e2e8f0;--muted:#94a3b8;
+        --primary:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+  a{color:var(--primary)}
+  #login{max-width:360px;margin:12vh auto;padding:28px;background:var(--card);border:1px solid var(--border);border-radius:16px}
+  #login h1{font-size:20px;margin:0 0 16px}
+  input,select,button{font:inherit}
+  input{width:100%;padding:10px 12px;margin:6px 0;background:#0b1220;border:1px solid var(--border);border-radius:10px;color:var(--fg)}
+  button{cursor:pointer;border:none;border-radius:10px;padding:8px 14px;background:var(--primary);color:#fff;font-weight:600}
+  button.ghost{background:#1e293b;color:var(--fg)}
+  button.warn{background:var(--warn)}button.err{background:var(--err)}button.ok{background:var(--ok)}
+  button.sm{padding:5px 9px;font-size:12px;border-radius:8px}
+  header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--card)}
+  header h1{font-size:16px;margin:0;flex:1}
+  nav{display:flex;gap:6px;flex-wrap:wrap;padding:12px 20px}
+  nav button{background:#1e293b}
+  nav button.active{background:var(--primary)}
+  main{padding:8px 20px 40px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px}
+  .card .v{font-size:26px;font-weight:700}.card .l{color:var(--muted);font-size:13px;margin-top:4px}
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);border-radius:12px;overflow:hidden}
+  th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+  th{color:var(--muted);font-weight:600;background:#0b1220}
+  tr:last-child td{border-bottom:none}
+  .pill{padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--border)}
+  .pill.active,.pill.paid,.pill.success{color:var(--ok);border-color:var(--ok)}
+  .pill.offline,.pill.blocked,.pill.failed{color:var(--err);border-color:var(--err)}
+  .pill.drain,.pill.wait_payment,.pill.pending{color:var(--warn);border-color:var(--warn)}
+  .row{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}
+  .err-msg{color:var(--err);font-size:13px;min-height:18px}
+  .muted{color:var(--muted)}
+  .hidden{display:none}
+  .scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>VPN · Admin</h1>
+  <input id="email" type="email" placeholder="email" autocomplete="username">
+  <input id="password" type="password" placeholder="пароль" autocomplete="current-password">
+  <button onclick="login()" style="width:100%;margin-top:8px">Войти</button>
+  <div class="err-msg" id="loginErr"></div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>🛡️ VPN Admin</h1>
+    <span class="muted" id="who"></span>
+    <button class="ghost sm" onclick="logout()">Выйти</button>
+  </header>
+  <nav id="nav"></nav>
+  <main id="view"></main>
+</div>
+
+<script>
+const API = "/api/v1";
+let token = localStorage.getItem("admtok") || "";
+const tabs = ["dashboard","users","servers","orders","payments","promocodes","audit"];
+const labels = {dashboard:"Дашборд",users:"Пользователи",servers:"Серверы",orders:"Заказы",payments:"Платежи",promocodes:"Промокоды",audit:"Аудит"};
+
+async function api(path, opts={}){
+  opts.headers = Object.assign({"Content-Type":"application/json","Authorization":"Bearer "+token}, opts.headers||{});
+  const r = await fetch(API+path, opts);
+  if(r.status===401){ logout(); throw new Error("unauthorized"); }
+  const t = await r.text();
+  const data = t ? JSON.parse(t) : {};
+  if(!r.ok) throw new Error(data.error||("HTTP "+r.status));
+  return data;
+}
+
+async function login(){
+  const email=document.getElementById("email").value, password=document.getElementById("password").value;
+  const err=document.getElementById("loginErr"); err.textContent="";
+  try{
+    const r = await fetch(API+"/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error||"ошибка входа");
+    if(!["admin","superadmin"].includes(d.user.role)){ throw new Error("нужна роль admin"); }
+    token = d.tokens.access_token; localStorage.setItem("admtok",token);
+    document.getElementById("who").textContent = d.user.email+" · "+d.user.role;
+    start();
+  }catch(e){ err.textContent = e.message; }
+}
+function logout(){ token=""; localStorage.removeItem("admtok"); document.getElementById("app").classList.add("hidden"); document.getElementById("login").classList.remove("hidden"); }
+
+function start(){
+  document.getElementById("login").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  const nav=document.getElementById("nav"); nav.innerHTML="";
+  tabs.forEach(t=>{ const b=document.createElement("button"); b.textContent=labels[t]; b.onclick=()=>show(t,b); nav.appendChild(b); });
+  show("dashboard", nav.firstChild);
+}
+function setActive(btn){ document.querySelectorAll("#nav button").forEach(b=>b.classList.remove("active")); if(btn) btn.classList.add("active"); }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function pill(s){ return '<span class="pill '+esc(s)+'">'+esc(s)+'</span>'; }
+function table(cols, rows){ return '<div class="scroll"><table><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr>'+rows.join('')+'</table></div>'; }
+
+async function show(tab, btn){
+  setActive(btn);
+  const v=document.getElementById("view"); v.innerHTML='<p class="muted">Загрузка…</p>';
+  try{ await renderers[tab](v); }catch(e){ v.innerHTML='<p class="err-msg">'+esc(e.message)+'</p>'; }
+}
+
+const renderers = {
+  async dashboard(v){
+    const d = await api("/admin/dashboard");
+    const c=(val,l)=>'<div class="card"><div class="v">'+val+'</div><div class="l">'+l+'</div></div>';
+    v.innerHTML='<div class="cards">'+
+      c(d.users,"Пользователи")+c(d.active_subscriptions,"Активные VPN")+
+      c(d.servers_active+"/"+d.servers_total,"Серверы (активные)")+
+      c(d.paid_orders,"Оплачено заказов")+c(d.orders_today,"Заказов сегодня")+
+      c("$"+d.revenue_total.toFixed(2),"Выручка")+'</div>';
+  },
+  async users(v){
+    const d = await api("/admin/users?limit=100");
+    const rows=d.users.map(u=>'<tr><td>'+esc(u.email||u.phone||("tg:"+u.telegram_id))+'</td><td>'+esc(u.role)+'</td><td>'+pill(u.status)+'</td><td>'+u.subscriptions+'</td><td>'+
+      (u.status==="blocked"
+        ? '<button class="sm ok" onclick="setUserStatus(\''+u.id+'\',\'active\')">Разблок.</button>'
+        : '<button class="sm err" onclick="setUserStatus(\''+u.id+'\',\'blocked\')">Блок</button>')+
+      ' <button class="sm ghost" onclick="setRole(\''+u.id+'\')">Роль</button></td></tr>').join('');
+    v.innerHTML=table(["Пользователь","Роль","Статус","VPN",""],rows);
+  },
+  async servers(v){
+    const d = await api("/admin/servers");
+    const rows=d.servers.map(s=>'<tr><td>'+esc(s.country)+'</td><td>'+esc(s.hostname)+'</td><td>'+esc(s.public_host)+'</td><td>'+pill(s.status)+'</td><td>'+s.client_count+'/'+s.capacity+'</td><td>'+
+      '<button class="sm ok" onclick="setServer(\''+s.id+'\',\'active\')">Вкл</button> '+
+      '<button class="sm warn" onclick="setServer(\''+s.id+'\',\'drain\')">Drain</button> '+
+      '<button class="sm err" onclick="setServer(\''+s.id+'\',\'offline\')">Выкл</button></td></tr>').join('');
+    v.innerHTML=table(["Страна","Хост","IP","Статус","Клиенты",""],rows);
+  },
+  async orders(v){
+    const d = await api("/admin/orders?limit=100");
+    const rows=d.orders.map(o=>'<tr><td>'+esc(o.user_email)+'</td><td>'+o.amount.toFixed(2)+' '+esc(o.currency)+'</td><td>'+esc(o.protocol)+'</td><td>'+esc(o.gateway)+'</td><td>'+pill(o.status)+'</td><td class="muted">'+esc(o.created_at.slice(0,16).replace("T"," "))+'</td></tr>').join('');
+    v.innerHTML=table(["Email","Сумма","Протокол","Шлюз","Статус","Создан"],rows);
+  },
+  async payments(v){
+    const d = await api("/admin/payments?limit=100");
+    const rows=d.payments.map(p=>'<tr><td>'+esc(p.gateway)+'</td><td>'+p.amount.toFixed(2)+' '+esc(p.currency)+'</td><td>'+pill(p.status)+'</td><td class="muted">'+esc(p.created_at.slice(0,16).replace("T"," "))+'</td></tr>').join('');
+    v.innerHTML=table(["Шлюз","Сумма","Статус","Создан"],rows);
+  },
+  async promocodes(v){
+    const d = await api("/admin/promocodes");
+    const rows=d.promocodes.map(p=>'<tr><td>'+esc(p.code)+'</td><td>'+esc(p.type)+'</td><td>'+p.discount+'</td><td>'+p.used_count+(p.max_uses?'/'+p.max_uses:'')+'</td><td>'+(p.active?pill("active"):pill("offline"))+'</td></tr>').join('');
+    v.innerHTML='<div class="row"><input id="pc" placeholder="КОД" style="width:140px">'+
+      '<select id="pt"><option value="percent">% процент</option><option value="fixed">фикс</option></select>'+
+      '<input id="pd" type="number" placeholder="скидка" style="width:110px">'+
+      '<button onclick="createPromo()">Создать</button></div>'+table(["Код","Тип","Скидка","Исп.","Активен"],rows);
+  },
+  async audit(v){
+    const d = await api("/admin/audit?limit=100");
+    const rows=d.audit.map(a=>'<tr><td>'+esc(a.actor_email)+'</td><td>'+esc(a.action)+'</td><td>'+esc(a.object_type)+'</td><td class="muted">'+esc(a.created_at.slice(0,16).replace("T"," "))+'</td></tr>').join('');
+    v.innerHTML=table(["Кто","Действие","Объект","Когда"],rows);
+  },
+};
+
+async function act(fn){ try{ await fn(); }catch(e){ alert(e.message); } }
+function reload(){ document.querySelector("#nav button.active").click(); }
+function setUserStatus(id,status){ act(async()=>{ await api("/admin/users/"+id+"/status",{method:"POST",body:JSON.stringify({status})}); reload(); }); }
+function setRole(id){ const role=prompt("Новая роль (user/support/admin/superadmin):","admin"); if(role) act(async()=>{ await api("/admin/users/"+id+"/role",{method:"POST",body:JSON.stringify({role})}); reload(); }); }
+function setServer(id,status){ act(async()=>{ await api("/admin/servers/"+id+"/status",{method:"POST",body:JSON.stringify({status})}); reload(); }); }
+function createPromo(){ const code=pc.value, type=pt.value, discount=parseFloat(pd.value||"0"); if(!code) return; act(async()=>{ await api("/admin/promocodes",{method:"POST",body:JSON.stringify({code,type,discount})}); reload(); }); }
+
+if(token){ start(); } // resume session if a token is present
+</script>
+</body>
+</html>

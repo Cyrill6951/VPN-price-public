@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vpnsaas/platform/internal/admin"
 	"github.com/vpnsaas/platform/internal/auth"
 	"github.com/vpnsaas/platform/internal/billing"
 	"github.com/vpnsaas/platform/internal/platform/cache"
@@ -127,6 +128,11 @@ func run() error {
 	userHandler.RegisterRoutes(mux)
 	vpnHandler.RegisterRoutes(mux)
 	billingHandler.RegisterRoutes(mux)
+
+	// CMS admin module + static panel at /admin.
+	adminHandler := admin.NewHandler(admin.NewRepository(db), authMW)
+	adminHandler.RegisterRoutes(mux)
+	adminHandler.RegisterPanel(mux)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestID,
