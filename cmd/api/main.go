@@ -12,6 +12,7 @@ import (
 	"github.com/vpnsaas/platform/internal/admin"
 	"github.com/vpnsaas/platform/internal/auth"
 	"github.com/vpnsaas/platform/internal/billing"
+	"github.com/vpnsaas/platform/internal/cabinet"
 	"github.com/vpnsaas/platform/internal/platform/cache"
 	"github.com/vpnsaas/platform/internal/platform/config"
 	"github.com/vpnsaas/platform/internal/platform/database"
@@ -133,6 +134,9 @@ func run() error {
 	adminHandler := admin.NewHandler(admin.NewRepository(db), authMW)
 	adminHandler.RegisterRoutes(mux)
 	adminHandler.RegisterPanel(mux)
+
+	// End-user web cabinet at /app.
+	cabinet.Register(mux)
 
 	handler := httpx.Chain(mux,
 		httpx.RequestID,

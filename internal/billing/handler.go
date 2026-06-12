@@ -53,6 +53,7 @@ func (h *Handler) buy(w http.ResponseWriter, r *http.Request) {
 		Gateway   string  `json:"gateway"`
 		PromoCode string  `json:"promo_code"`
 		Label     *string `json:"label"`
+		Routing   string  `json:"routing"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -76,6 +77,7 @@ func (h *Handler) buy(w http.ResponseWriter, r *http.Request) {
 		Gateway:   req.Gateway,
 		PromoCode: req.PromoCode,
 		Label:     req.Label,
+		Routing:   vpn.RoutingMode(req.Routing),
 	})
 	if err != nil {
 		writeBillingError(w, err)

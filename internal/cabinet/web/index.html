@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN · Личный кабинет</title>
+<style>
+  :root{--bg:#050816;--card:#0f172a;--border:#334155;--fg:#e2e8f0;--muted:#94a3b8;
+        --primary:#3b82f6;--cyan:#06b6d4;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+  input,select,button{font:inherit}
+  input,select{width:100%;padding:10px 12px;margin:6px 0;background:#0b1220;border:1px solid var(--border);border-radius:10px;color:var(--fg)}
+  button{cursor:pointer;border:none;border-radius:10px;padding:10px 16px;background:linear-gradient(135deg,var(--primary),var(--cyan));color:#fff;font-weight:600}
+  button.ghost{background:#1e293b;color:var(--fg)}button.sm{padding:6px 11px;font-size:13px}
+  button.err{background:var(--err)}
+  #auth{max-width:380px;margin:10vh auto;padding:30px;background:var(--card);border:1px solid var(--border);border-radius:18px}
+  #auth h1{margin:0 0 6px}#auth .muted{margin-bottom:14px}
+  .tabsw{display:flex;gap:6px;margin-bottom:10px}.tabsw button{flex:1;background:#1e293b}.tabsw button.active{background:var(--primary)}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0;z-index:5}
+  header h1{font-size:17px;margin:0;flex:1}
+  nav{display:flex;gap:6px;flex-wrap:wrap;padding:12px 20px}
+  nav button{background:#1e293b}nav button.active{background:var(--primary)}
+  main{padding:6px 20px 50px;max-width:900px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;margin-bottom:14px}
+  .vpn{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .vpn .meta{font-size:13px;color:var(--muted);margin-top:4px}
+  .pill{padding:2px 9px;border-radius:999px;font-size:11px;border:1px solid var(--border)}
+  .pill.active{color:var(--ok);border-color:var(--ok)}.pill.expired,.pill.blocked{color:var(--err);border-color:var(--err)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+  .err-msg{color:var(--err);font-size:13px;min-height:18px}
+  .muted{color:var(--muted)}.hidden{display:none}.grid{display:grid;gap:8px}
+  table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left}
+  th{color:var(--muted)}
+  .qr{max-width:220px;border-radius:12px;margin-top:8px}
+  h2{font-size:18px;margin:6px 0 12px}
+</style>
+</head>
+<body>
+
+<div id="auth">
+  <h1>🔐 VPN</h1>
+  <div class="muted">Личный кабинет</div>
+  <div class="tabsw"><button id="tbLogin" class="active" onclick="mode('login')">Вход</button><button id="tbReg" onclick="mode('reg')">Регистрация</button></div>
+  <input id="email" type="email" placeholder="email" autocomplete="username">
+  <input id="password" type="password" placeholder="пароль" autocomplete="current-password">
+  <button style="width:100%;margin-top:8px" onclick="submitAuth()" id="authBtn">Войти</button>
+  <div class="err-msg" id="authErr"></div>
+</div>
+
+<div id="app" class="hidden">
+  <header><h1>🔐 VPN кабинет</h1><span class="muted" id="who"></span><button class="ghost sm" onclick="logout()">Выйти</button></header>
+  <nav id="nav"></nav>
+  <main id="view"></main>
+</div>
+
+<script>
+const API="/api/v1";
+let token=localStorage.getItem("captok")||"";
+let authMode="login";
+const tabs=["vpn","buy","devices","payments","profile"];
+const labels={vpn:"Мои VPN",buy:"Купить",devices:"Устройства",payments:"Платежи",profile:"Профиль"};
+
+function mode(m){authMode=m;document.getElementById("tbLogin").classList.toggle("active",m==="login");document.getElementById("tbReg").classList.toggle("active",m==="reg");document.getElementById("authBtn").textContent=m==="login"?"Войти":"Создать аккаунт";}
+async function api(path,opts={}){
+  opts.headers=Object.assign({"Content-Type":"application/json","Authorization":"Bearer "+token},opts.headers||{});
+  const r=await fetch(API+path,opts);
+  if(r.status===401){logout();throw new Error("сессия истекла");}
+  const t=await r.text();const d=t?JSON.parse(t):{};
+  if(!r.ok)throw new Error(d.error||("HTTP "+r.status));return d;
+}
+async function raw(path){const r=await fetch(API+path,{headers:{"Authorization":"Bearer "+token}});if(!r.ok)throw new Error("HTTP "+r.status);return r.blob();}
+
+async function submitAuth(){
+  const email=document.getElementById("email").value,pw=document.getElementById("password").value;
+  const err=document.getElementById("authErr");err.textContent="";
+  try{
+    const ep=authMode==="login"?"/auth/login":"/auth/register";
+    const r=await fetch(API+ep,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password:pw})});
+    const d=await r.json();if(!r.ok)throw new Error(d.error||"ошибка");
+    token=d.tokens.access_token;localStorage.setItem("captok",token);
+    document.getElementById("who").textContent=d.user.email||"";
+    start();
+  }catch(e){err.textContent=e.message;}
+}
+function logout(){token="";localStorage.removeItem("captok");document.getElementById("app").classList.add("hidden");document.getElementById("auth").classList.remove("hidden");}
+function start(){document.getElementById("auth").classList.add("hidden");document.getElementById("app").classList.remove("hidden");
+  const nav=document.getElementById("nav");nav.innerHTML="";tabs.forEach(t=>{const b=document.createElement("button");b.textContent=labels[t];b.onclick=()=>show(t,b);nav.appendChild(b);});
+  show("vpn",nav.firstChild);}
+function setActive(b){document.querySelectorAll("#nav button").forEach(x=>x.classList.remove("active"));if(b)b.classList.add("active");}
+function esc(s){return(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+function reload(){document.querySelector("#nav button.active").click();}
+async function show(tab,btn){setActive(btn);const v=document.getElementById("view");v.innerHTML='<p class="muted">Загрузка…</p>';try{await R[tab](v);}catch(e){v.innerHTML='<p class="err-msg">'+esc(e.message)+'</p>';}}
+
+const R={
+  async vpn(v){
+    const d=await api("/vpn/list");
+    if(!d.vpns.length){v.innerHTML='<div class="card">У вас пока нет VPN. Перейдите в «Купить».</div>';return;}
+    v.innerHTML=d.vpns.map(x=>{const s=x.subscription;const id=s.id;
+      return '<div class="card"><div class="vpn"><div><b>'+esc(x.country)+'</b> · '+esc(s.protocol)+' '+
+        '<span class="pill '+esc(s.status)+'">'+esc(s.status)+'</span><div class="meta">до '+esc(s.expires_at.slice(0,10))+'</div></div>'+
+        '<div class="row"><button class="sm" onclick="dl(\''+id+'\')">Конфиг</button>'+
+        '<button class="sm ghost" onclick="qr(\''+id+'\')">QR</button>'+
+        '<button class="sm ghost" onclick="renew(\''+id+'\')">Продлить</button>'+
+        '<button class="sm err" onclick="delVpn(\''+id+'\')">Удалить</button></div></div><div id="qr_'+id+'"></div></div>';}).join('');
+  },
+  async buy(v){
+    const [co,pl,gw]=await Promise.all([api("/countries"),api("/plans"),api("/billing/gateways")]);
+    const opts=a=>a.map(x=>'<option value="'+x.id+'">'+esc(x.name)+(x.price!=null?(' — $'+x.price):'')+'</option>').join('');
+    v.innerHTML='<div class="card"><h2>Новый VPN</h2>'+
+      '<label class="muted">Страна</label><select id="bco">'+opts(co.countries)+'</select>'+
+      '<label class="muted">Протокол</label><select id="bpr" onchange="togRoute()">'+
+        '<option value="wireguard">WireGuard (весь трафик)</option>'+
+        '<option value="wireguard_split">WireGuard 🇷🇺 (РФ-ресурсы напрямую)</option>'+
+        '<option value="vless_reality">VLESS · Reality</option></select>'+
+      '<label class="muted">Тариф</label><select id="bpl">'+opts(pl.plans)+'</select>'+
+      '<div class="row" style="margin-top:10px"><button onclick="buy()">Оформить</button>'+
+      '<span class="muted">шлюз: '+esc((gw.gateways[0]||"—"))+'</span></div>'+
+      '<div class="err-msg" id="buyMsg"></div></div>';
+    window._gw=gw.gateways[0]||"";
+  },
+  async devices(v){
+    const d=await api("/users/me/devices");
+    const rows=(d.devices||[]).map(x=>'<tr><td>'+esc(x.name||x.device_uuid)+'</td><td>'+esc(x.platform||"")+'</td><td><button class="sm err" onclick="delDev(\''+x.id+'\')">×</button></td></tr>').join('');
+    v.innerHTML='<div class="card"><h2>Устройства</h2><div class="row"><input id="dn" placeholder="название" style="max-width:180px"><input id="du" placeholder="uuid устройства" style="max-width:200px"><button onclick="addDev()">Добавить</button></div><table><tr><th>Имя</th><th>Платформа</th><th></th></tr>'+rows+'</table></div>';
+  },
+  async payments(v){
+    const d=await api("/billing/orders");
+    const rows=(d.orders||[]).map(o=>'<tr><td>'+o.amount.toFixed(2)+' '+esc(o.currency)+'</td><td>'+esc(o.protocol)+'</td><td>'+esc(o.gateway)+'</td><td><span class="pill '+esc(o.status)+'">'+esc(o.status)+'</span></td><td class="muted">'+esc(o.created_at.slice(0,10))+'</td></tr>').join('');
+    v.innerHTML='<div class="card"><h2>История</h2><table><tr><th>Сумма</th><th>Протокол</th><th>Шлюз</th><th>Статус</th><th>Дата</th></tr>'+(rows||'<tr><td colspan=5 class="muted">пусто</td></tr>')+'</table></div>';
+  },
+  async profile(v){
+    const me=await api("/users/me");
+    v.innerHTML='<div class="card"><h2>Профиль</h2>'+
+      '<div class="muted">Email</div><div>'+esc(me.email||"—")+'</div>'+
+      '<div class="muted" style="margin-top:8px">Язык</div><input id="plang" value="'+esc(me.language)+'" style="max-width:120px">'+
+      '<div class="row"><button class="sm" onclick="saveProfile()">Сохранить</button></div></div>';
+  },
+};
+
+function togRoute(){}
+async function act(fn){try{await fn();}catch(e){alert(e.message);}}
+
+async function buy(){
+  const msg=document.getElementById("buyMsg");msg.textContent="Создаём заказ…";
+  let proto=bpr.value,routing="full";
+  if(proto==="wireguard_split"){proto="wireguard";routing="split_ru";}
+  try{
+    const d=await api("/billing/buy",{method:"POST",body:JSON.stringify({plan_id:bpl.value,country_id:bco.value,protocol:proto,gateway:window._gw,routing})});
+    const url=d.payment&&d.payment.payment_url;
+    if(window._gw==="mock"){ // dev gateway: auto-confirm
+      msg.textContent="Подтверждаем оплату (демо)…";
+      await api("/billing/dev/confirm",{method:"POST",body:JSON.stringify({order_id:d.order.id})});
+      msg.textContent="Готово! VPN выдан.";
+      setTimeout(()=>document.querySelector("#nav button").click(),700);
+    } else if(url){ window.open(url,"_blank"); msg.textContent="Откройте страницу оплаты в новой вкладке."; }
+    else { msg.textContent="Заказ создан. Оплатите через бот/шлюз."; }
+  }catch(e){msg.textContent=e.message;}
+}
+function renew(id){ // reuse buy with renew via bot is simpler; here we just inform
+  alert("Продление доступно в Telegram-боте, либо оформите новый период во вкладке «Купить».");
+}
+async function dl(id){act(async()=>{const b=await raw("/vpn/"+id+"/config");const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download="vpn.conf";a.click();URL.revokeObjectURL(u);});}
+async function qr(id){act(async()=>{try{const b=await raw("/vpn/"+id+"/qr");document.getElementById("qr_"+id).innerHTML='<img class="qr" src="'+URL.createObjectURL(b)+'">';}catch(e){alert("QR недоступен для этого конфига (большой split-конфиг) — используйте файл.");}});}
+function delVpn(id){if(confirm("Удалить этот VPN?"))act(async()=>{await api("/vpn/"+id,{method:"DELETE"});reload();});}
+function addDev(){act(async()=>{await api("/users/me/devices",{method:"POST",body:JSON.stringify({device_uuid:du.value||("dev-"+Date.now()),name:dn.value,platform:"web"})});reload();});}
+function delDev(id){act(async()=>{await api("/users/me/devices/"+id,{method:"DELETE"});reload();});}
+function saveProfile(){act(async()=>{await api("/users/me",{method:"PUT",body:JSON.stringify({language:plang.value})});alert("Сохранено");});}
+
+if(token){start();}
+</script>
+</body>
+</html>
