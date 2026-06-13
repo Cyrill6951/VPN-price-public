@@ -118,9 +118,39 @@ func (s *Service) generate(ctx context.Context, srv Server, protocol Protocol, l
 		return s.generateReality(srv, label)
 	case ProtocolShadowsocks:
 		return s.generateShadowsocks(srv, label)
+	case ProtocolTrojan:
+		return s.generateTrojan(srv, label)
 	default:
 		return generated{}, ErrUnsupportedProtocol
 	}
+}
+
+func (s *Service) generateTrojan(srv Server, label string) (generated, error) {
+	if srv.TrojanPort == nil || srv.RealityPublicKey == nil || srv.RealitySNI == nil {
+		return generated{}, ErrServerNotConfigured
+	}
+	shortID := ""
+	if srv.RealityShortID != nil {
+		shortID = *srv.RealityShortID
+	}
+	password := NewUUID()
+	email := NewUUID()
+	uri := renderTrojanURI(trojanParams{
+		Password:  password,
+		Host:      srv.PublicHost,
+		Port:      *srv.TrojanPort,
+		SNI:       *srv.RealitySNI,
+		PublicKey: *srv.RealityPublicKey,
+		ShortID:   shortID,
+		Label:     label,
+	})
+	return generated{
+		uri:        uri,
+		configText: uri,
+		hash:       sha256hex(uri),
+		clientUUID: &email,
+		ssUserKey:  &password, // carries the Trojan password (encrypted before store)
+	}, nil
 }
 
 func (s *Service) generateShadowsocks(srv Server, label string) (generated, error) {
@@ -236,6 +266,8 @@ func (s *Service) provision(ctx context.Context, srv Server, protocol Protocol, 
 		return s.provisioner.AddVLESSClient(ctx, srv, derefStr(gen.clientUUID))
 	case ProtocolShadowsocks:
 		return s.provisioner.AddShadowsocksClient(ctx, srv, derefStr(gen.ssUserKey), derefStr(gen.clientUUID))
+	case ProtocolTrojan:
+		return s.provisioner.AddTrojanClient(ctx, srv, derefStr(gen.ssUserKey), derefStr(gen.clientUUID))
 	default:
 		return ErrUnsupportedProtocol
 	}
@@ -298,6 +330,12 @@ func (s *Service) Delete(ctx context.Context, userID, subscriptionID uuid.UUID) 
 		if del.ClientUUID != nil {
 			if err := s.provisioner.RemoveShadowsocksClient(ctx, del.Server, *del.ClientUUID); err != nil {
 				s.log.Warn("deprovision shadowsocks client failed", "error", err)
+			}
+		}
+	case ProtocolTrojan:
+		if del.ClientUUID != nil {
+			if err := s.provisioner.RemoveTrojanClient(ctx, del.Server, *del.ClientUUID); err != nil {
+				s.log.Warn("deprovision trojan client failed", "error", err)
 			}
 		}
 	}
@@ -458,6 +496,10 @@ func (s *Service) deprovisionOld(ctx context.Context, oldServer Server, protocol
 	case ProtocolShadowsocks:
 		if clientUUID != nil {
 			_ = s.provisioner.RemoveShadowsocksClient(ctx, oldServer, *clientUUID)
+		}
+	case ProtocolTrojan:
+		if clientUUID != nil {
+			_ = s.provisioner.RemoveTrojanClient(ctx, oldServer, *clientUUID)
 		}
 	}
 }

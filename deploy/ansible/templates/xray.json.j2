@@ -37,6 +37,25 @@
       }
     },
     {
+      "tag": "trojan",
+      "listen": "0.0.0.0",
+      "port": {{ trojan_port | default(8443) }},
+      "protocol": "trojan",
+      "settings": { "clients": [] },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "{{ reality_dest }}",
+          "xver": 0,
+          "serverNames": ["{{ reality_sni }}"],
+          "privateKey": "{{ reality_private_key }}",
+          "shortIds": ["{{ reality_short_id }}"]
+        }
+      }
+    },
+    {
       "tag": "api",
       "listen": "127.0.0.1",
       "port": 10085,

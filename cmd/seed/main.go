@@ -129,12 +129,12 @@ func ensureServer(ctx context.Context, pool *pgxpool.Pool, countryID uuid.UUID, 
 			country_id, provider, hostname, public_host, status, priority, capacity,
 			wg_port, wg_public_key, wg_subnet, wg_dns,
 			reality_port, reality_public_key, reality_sni, reality_short_id, reality_dest,
-			ss_port, ss_method, ss_server_key
+			ss_port, ss_method, ss_server_key, trojan_port
 		) VALUES (
 			$1, 'dev', 'de-dev-01', $2, 'active', 10, 1000,
 			51820, $3, '10.7.0.0/24', '1.1.1.1',
 			443, $4, 'www.microsoft.com', $5, 'www.microsoft.com:443',
-			8388, '2022-blake3-aes-128-gcm', $6
+			8388, '2022-blake3-aes-128-gcm', $6, 8443
 		)`, countryID, host, wgPub, realPub, shortID, ssKey)
 	if err != nil {
 		return err

@@ -40,6 +40,7 @@ func protocolsKeyboard() *InlineKeyboardMarkup {
 		{{Text: "WireGuard 🇷🇺 (РФ-ресурсы напрямую)", CallbackData: "proto:wireguard_split"}},
 		{{Text: "VLESS · Reality", CallbackData: "proto:vless_reality"}},
 		{{Text: "Shadowsocks", CallbackData: "proto:shadowsocks"}},
+		{{Text: "Trojan · Reality", CallbackData: "proto:trojan"}},
 		backToMenuRow(),
 	}}
 }

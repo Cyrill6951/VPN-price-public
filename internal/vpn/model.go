@@ -16,11 +16,16 @@ const (
 	ProtocolWireGuard    Protocol = "wireguard"
 	ProtocolVLESSReality Protocol = "vless_reality"
 	ProtocolShadowsocks  Protocol = "shadowsocks"
+	ProtocolTrojan       Protocol = "trojan"
 )
 
 // Valid reports whether p is a supported protocol.
 func (p Protocol) Valid() bool {
-	return p == ProtocolWireGuard || p == ProtocolVLESSReality || p == ProtocolShadowsocks
+	switch p {
+	case ProtocolWireGuard, ProtocolVLESSReality, ProtocolShadowsocks, ProtocolTrojan:
+		return true
+	}
+	return false
 }
 
 // Server is a VPN node with its protocol parameters.
@@ -45,6 +50,8 @@ type Server struct {
 	SSPort      *int
 	SSMethod    *string
 	SSServerKey *string
+
+	TrojanPort *int
 }
 
 // Plan is a purchasable tariff.

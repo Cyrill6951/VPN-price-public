@@ -27,12 +27,13 @@ type agent struct {
 	wgInterface string
 
 	// VLESS / Xray
-	xrayConfig string
-	xrayTag    string
-	xrayFlow   string
-	xraySSTag  string
-	reloadCmd  string
-	xrayMu     sync.Mutex
+	xrayConfig    string
+	xrayTag       string
+	xrayFlow      string
+	xraySSTag     string
+	xrayTrojanTag string
+	reloadCmd     string
+	xrayMu        sync.Mutex
 
 	log *slog.Logger
 }
@@ -41,14 +42,15 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	a := &agent{
-		token:       os.Getenv("AGENT_TOKEN"),
-		wgInterface: getenv("WG_INTERFACE", "wg0"),
-		xrayConfig:  getenv("XRAY_CONFIG", "/opt/vpn-node/xray.json"),
-		xrayTag:     getenv("XRAY_INBOUND_TAG", "vless-reality"),
-		xrayFlow:    getenv("XRAY_FLOW", "xtls-rprx-vision"),
-		xraySSTag:   getenv("XRAY_SS_INBOUND_TAG", "shadowsocks"),
-		reloadCmd:   getenv("XRAY_RELOAD_CMD", "docker restart vpn-node-xray-1"),
-		log:         log,
+		token:         os.Getenv("AGENT_TOKEN"),
+		wgInterface:   getenv("WG_INTERFACE", "wg0"),
+		xrayConfig:    getenv("XRAY_CONFIG", "/opt/vpn-node/xray.json"),
+		xrayTag:       getenv("XRAY_INBOUND_TAG", "vless-reality"),
+		xrayFlow:      getenv("XRAY_FLOW", "xtls-rprx-vision"),
+		xraySSTag:     getenv("XRAY_SS_INBOUND_TAG", "shadowsocks"),
+		xrayTrojanTag: getenv("XRAY_TROJAN_INBOUND_TAG", "trojan"),
+		reloadCmd:     getenv("XRAY_RELOAD_CMD", "docker restart vpn-node-xray-1"),
+		log:           log,
 	}
 	if a.token == "" {
 		log.Error("AGENT_TOKEN is required")
@@ -66,6 +68,8 @@ func main() {
 	mux.Handle("POST /vless/clients/remove", a.auth(http.HandlerFunc(a.removeVLESS)))
 	mux.Handle("POST /ss/clients", a.auth(http.HandlerFunc(a.addSS)))
 	mux.Handle("POST /ss/clients/remove", a.auth(http.HandlerFunc(a.removeSS)))
+	mux.Handle("POST /trojan/clients", a.auth(http.HandlerFunc(a.addTrojan)))
+	mux.Handle("POST /trojan/clients/remove", a.auth(http.HandlerFunc(a.removeTrojan)))
 	mux.Handle("GET /status", a.auth(http.HandlerFunc(a.status)))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -201,6 +205,37 @@ func (a *agent) removeSS(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.editXrayClients(a.xraySSTag, "email", req.Email, false, nil); err != nil {
 		a.fail(w, "remove ss client", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// addTrojan / removeTrojan manage Trojan (over Reality) clients by email.
+func (a *agent) addTrojan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := a.editXrayClients(a.xrayTrojanTag, "email", req.Email, true,
+		map[string]any{"password": req.Password, "email": req.Email, "flow": a.xrayFlow}); err != nil {
+		a.fail(w, "add trojan client", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
+}
+
+func (a *agent) removeTrojan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := a.editXrayClients(a.xrayTrojanTag, "email", req.Email, false, nil); err != nil {
+		a.fail(w, "remove trojan client", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})

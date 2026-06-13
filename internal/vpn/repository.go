@@ -22,7 +22,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 const serverColumns = `id, country_id, public_host, agent_url, status,
 	wg_port, wg_public_key, wg_subnet::text, wg_dns,
 	reality_port, reality_public_key, reality_sni, reality_short_id, reality_dest,
-	ss_port, ss_method, ss_server_key`
+	ss_port, ss_method, ss_server_key, trojan_port`
 
 func scanServer(row pgx.Row) (Server, error) {
 	var s Server
@@ -31,7 +31,7 @@ func scanServer(row pgx.Row) (Server, error) {
 		&s.ID, &s.CountryID, &s.PublicHost, &s.AgentURL, &s.Status,
 		&s.WGPort, &s.WGPublicKey, &subnet, &s.WGDNS,
 		&s.RealityPort, &s.RealityPublicKey, &s.RealitySNI, &s.RealityShortID, &s.RealityDest,
-		&s.SSPort, &s.SSMethod, &s.SSServerKey,
+		&s.SSPort, &s.SSMethod, &s.SSServerKey, &s.TrojanPort,
 	)
 	s.WGSubnet = subnet
 	return s, err
@@ -63,6 +63,8 @@ func protocolAvailabilityClause(p Protocol) string {
 		return "reality_port IS NOT NULL AND reality_public_key IS NOT NULL"
 	case ProtocolShadowsocks:
 		return "ss_port IS NOT NULL AND ss_server_key IS NOT NULL"
+	case ProtocolTrojan:
+		return "trojan_port IS NOT NULL AND reality_public_key IS NOT NULL"
 	default:
 		return "wg_port IS NOT NULL AND wg_public_key IS NOT NULL AND wg_subnet IS NOT NULL"
 	}

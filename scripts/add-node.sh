@@ -98,6 +98,7 @@ reality_port=443
 ss_port=8388
 ss_method=2022-blake3-aes-128-gcm
 ss_server_key=$SS_KEY
+trojan_port=8443
 agent_port=8090
 agent_token=$AGENT_TOKEN
 INVENTORY
@@ -122,11 +123,11 @@ INSERT INTO servers (
   country_id, provider, hostname, public_host, agent_url, status, priority, capacity,
   wg_port, wg_public_key, wg_subnet, wg_dns,
   reality_port, reality_public_key, reality_sni, reality_short_id, reality_dest,
-  ss_port, ss_method, ss_server_key)
+  ss_port, ss_method, ss_server_key, trojan_port)
 SELECT c.id, 'manual', '$HOSTNAME_TAG', '$HOST', 'http://$HOST:8090', 'active', 10, 1000,
   51820, '$WG_PUB', '$WG_SUBNET', '1.1.1.1',
   443, '$R_PUB', 'www.microsoft.com', '$SID', 'www.microsoft.com:443',
-  8388, '2022-blake3-aes-128-gcm', '$SS_KEY'
+  8388, '2022-blake3-aes-128-gcm', '$SS_KEY', 8443
 FROM countries c WHERE c.iso = '$ISO';
 SQL
 

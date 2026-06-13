@@ -20,6 +20,8 @@ type Provisioner interface {
 	RemoveVLESSClient(ctx context.Context, srv Server, clientUUID string) error
 	AddShadowsocksClient(ctx context.Context, srv Server, userKey, email string) error
 	RemoveShadowsocksClient(ctx context.Context, srv Server, email string) error
+	AddTrojanClient(ctx context.Context, srv Server, password, email string) error
+	RemoveTrojanClient(ctx context.Context, srv Server, email string) error
 }
 
 // NewProvisioner returns the provisioner selected by mode ("noop" or "agent").
@@ -64,6 +66,14 @@ func (p *noopProvisioner) RemoveShadowsocksClient(_ context.Context, srv Server,
 	p.log.Info("noop: remove shadowsocks client", "server", srv.ID, "email", email)
 	return nil
 }
+func (p *noopProvisioner) AddTrojanClient(_ context.Context, srv Server, _, email string) error {
+	p.log.Info("noop: add trojan client", "server", srv.ID, "email", email)
+	return nil
+}
+func (p *noopProvisioner) RemoveTrojanClient(_ context.Context, srv Server, email string) error {
+	p.log.Info("noop: remove trojan client", "server", srv.ID, "email", email)
+	return nil
+}
 
 // agentProvisioner talks to the node agent (see cmd/agent) over HTTP.
 type agentProvisioner struct {
@@ -91,6 +101,12 @@ func (p *agentProvisioner) AddShadowsocksClient(ctx context.Context, srv Server,
 }
 func (p *agentProvisioner) RemoveShadowsocksClient(ctx context.Context, srv Server, email string) error {
 	return p.post(ctx, srv, "/ss/clients/remove", map[string]string{"email": email})
+}
+func (p *agentProvisioner) AddTrojanClient(ctx context.Context, srv Server, password, email string) error {
+	return p.post(ctx, srv, "/trojan/clients", map[string]string{"password": password, "email": email})
+}
+func (p *agentProvisioner) RemoveTrojanClient(ctx context.Context, srv Server, email string) error {
+	return p.post(ctx, srv, "/trojan/clients/remove", map[string]string{"email": email})
 }
 
 func (p *agentProvisioner) post(ctx context.Context, srv Server, path string, payload any) error {
