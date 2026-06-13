@@ -132,11 +132,11 @@ const renderers = {
   },
   async servers(v){
     const d = await api("/admin/servers");
-    const rows=d.servers.map(s=>'<tr><td>'+esc(s.country)+'</td><td>'+esc(s.hostname)+'</td><td>'+esc(s.public_host)+'</td><td>'+pill(s.status)+'</td><td>'+s.client_count+'/'+s.capacity+'</td><td>'+
+    const rows=d.servers.map(s=>'<tr><td>'+esc(s.country)+'</td><td>'+esc(s.hostname)+'</td><td>'+esc(s.public_host)+'</td><td>'+pill(s.status)+'</td><td>'+(s.health_score>=60?'🟢':s.health_score>0?'🟡':'🔴')+' '+s.health_score+'</td><td>'+s.client_count+'/'+s.capacity+'</td><td>'+
       '<button class="sm ok" onclick="setServer(\''+s.id+'\',\'active\')">Вкл</button> '+
       '<button class="sm warn" onclick="setServer(\''+s.id+'\',\'drain\')">Drain</button> '+
       '<button class="sm err" onclick="setServer(\''+s.id+'\',\'offline\')">Выкл</button></td></tr>').join('');
-    v.innerHTML=table(["Страна","Хост","IP","Статус","Клиенты",""],rows);
+    v.innerHTML=table(["Страна","Хост","IP","Статус","Health","Клиенты",""],rows);
   },
   async orders(v){
     const d = await api("/admin/orders?limit=100");

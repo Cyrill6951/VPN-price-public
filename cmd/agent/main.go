@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +66,7 @@ func main() {
 	mux.Handle("POST /vless/clients/remove", a.auth(http.HandlerFunc(a.removeVLESS)))
 	mux.Handle("POST /ss/clients", a.auth(http.HandlerFunc(a.addSS)))
 	mux.Handle("POST /ss/clients/remove", a.auth(http.HandlerFunc(a.removeSS)))
+	mux.Handle("GET /status", a.auth(http.HandlerFunc(a.status)))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Info("agent listening", "addr", addr, "wg_interface", a.wgInterface, "xray_tag", a.xrayTag)
@@ -276,6 +279,124 @@ func (a *agent) inboundSettings(cfg map[string]any, tag string) (map[string]any,
 		return settings, nil
 	}
 	return nil, fmt.Errorf("inbound with tag %q not found", tag)
+}
+
+// --- node status / health ---
+
+// blockTargets are the sites probed from the node to detect egress blocking.
+func blockTargets() map[string]string {
+	targets := map[string]string{
+		"google":     "https://www.google.com/generate_204",
+		"youtube":    "https://www.youtube.com/favicon.ico",
+		"telegram":   "https://api.telegram.org",
+		"cloudflare": "https://www.cloudflare.com/cdn-cgi/trace",
+	}
+	if env := os.Getenv("BLOCK_CHECK_TARGETS"); env != "" {
+		targets = map[string]string{}
+		for _, pair := range strings.Split(env, ",") {
+			if name, url, ok := strings.Cut(pair, "="); ok {
+				targets[strings.TrimSpace(name)] = strings.TrimSpace(url)
+			}
+		}
+	}
+	return targets
+}
+
+func (a *agent) status(w http.ResponseWriter, _ *http.Request) {
+	st := map[string]any{
+		"cpu_load":     cpuLoad(),
+		"mem_used_pct": memUsedPct(),
+		"wg_peers":     a.wgPeerCount(),
+		"xray_up":      a.xrayUp(),
+		"blocks":       a.blockCheck(),
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func cpuLoad() float64 {
+	b, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(b))
+	if len(fields) == 0 {
+		return 0
+	}
+	load, _ := strconv.ParseFloat(fields[0], 64)
+	n := runtime.NumCPU()
+	if n == 0 {
+		n = 1
+	}
+	return load / float64(n)
+}
+
+func memUsedPct() float64 {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	var total, avail float64
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "MemTotal:":
+			total, _ = strconv.ParseFloat(f[1], 64)
+		case "MemAvailable:":
+			avail, _ = strconv.ParseFloat(f[1], 64)
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return (1 - avail/total) * 100
+}
+
+func (a *agent) wgPeerCount() int {
+	cmd := exec.Command("wg", "show", a.wgInterface, "peers")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func (a *agent) xrayUp() bool {
+	out, err := exec.Command("sh", "-c", "docker ps --filter name=xray --filter status=running -q").Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+func (a *agent) blockCheck() map[string]bool {
+	client := &http.Client{Timeout: 6 * time.Second}
+	res := map[string]bool{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for name, url := range blockTargets() {
+		wg.Add(1)
+		go func(name, url string) {
+			defer wg.Done()
+			ok := false
+			if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
+				if resp, err := client.Do(req); err == nil {
+					ok = resp.StatusCode < 500
+					_ = resp.Body.Close()
+				}
+			}
+			mu.Lock()
+			res[name] = ok
+			mu.Unlock()
+		}(name, url)
+	}
+	wg.Wait()
+	return res
 }
 
 // --- helpers ---

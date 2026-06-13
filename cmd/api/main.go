@@ -13,6 +13,7 @@ import (
 	"github.com/vpnsaas/platform/internal/auth"
 	"github.com/vpnsaas/platform/internal/billing"
 	"github.com/vpnsaas/platform/internal/cabinet"
+	"github.com/vpnsaas/platform/internal/monitoring"
 	"github.com/vpnsaas/platform/internal/platform/cache"
 	"github.com/vpnsaas/platform/internal/platform/config"
 	"github.com/vpnsaas/platform/internal/platform/database"
@@ -25,6 +26,15 @@ import (
 	"github.com/vpnsaas/platform/internal/user"
 	"github.com/vpnsaas/platform/internal/vpn"
 )
+
+// tgNotifier adapts the Telegram bot to the monitoring.Notifier interface.
+type tgNotifier struct{ bot *telegram.Bot }
+
+func (n tgNotifier) NotifyMigration(ctx context.Context, telegramID int64, country string) {
+	n.bot.NotifyUser(ctx, telegramID,
+		"♻️ Ваш VPN ("+country+") переехал на резервный сервер из-за сбоя или блокировки. "+
+			"Конфигурация обновлена — откройте «Мои VPN» и переподключитесь.")
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -115,10 +125,15 @@ func run() error {
 	go billing.NewExpirer(db, cfg.GracePeriod, time.Minute, log).Run(ctx)
 
 	// Telegram bot (long polling) — only when a token is configured.
+	var migrationNotifier monitoring.Notifier
 	if cfg.TelegramBotToken != "" {
 		bot := telegram.NewBot(cfg.TelegramBotToken, rdb, authSvc, vpnSvc, billingSvc, cfg.StarsPerUSD, log)
 		go bot.Run(ctx)
+		migrationNotifier = tgNotifier{bot: bot}
 	}
+
+	// Monitoring: poll node health and auto-migrate clients off failed/blocked nodes.
+	go monitoring.NewEngine(db, vpnSvc, migrationNotifier, cfg.ProvisionerAgentToken, 30*time.Second, log).Run(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", checker.Live)

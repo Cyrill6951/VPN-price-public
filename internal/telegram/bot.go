@@ -86,6 +86,13 @@ func (b *Bot) dispatch(ctx context.Context, u Update) {
 	}
 }
 
+// NotifyUser sends a plain notification to a Telegram chat (best-effort).
+func (b *Bot) NotifyUser(ctx context.Context, chatID int64, text string) {
+	if err := b.api.SendMessage(ctx, chatID, text, nil); err != nil {
+		b.log.Warn("notify user failed", "chat", chatID, "error", err)
+	}
+}
+
 // ensureUser links (or creates) the platform account for a Telegram user.
 func (b *Bot) ensureUser(ctx context.Context, from *User) (auth.User, error) {
 	return b.auth.EnsureTelegramUser(ctx, from.ID, from.FirstName, from.LastName, from.Username)

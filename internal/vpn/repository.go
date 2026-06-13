@@ -216,6 +216,138 @@ func (r *Repository) ListPlans(ctx context.Context) ([]PlanRef, error) {
 	return out, rows.Err()
 }
 
+// MigrationSub is an active subscription that may need migrating.
+type MigrationSub struct {
+	SubID      uuid.UUID
+	UserID     uuid.UUID
+	CountryID  uuid.UUID
+	Protocol   Protocol
+	Label      *string
+	TelegramID *int64
+	Country    string
+}
+
+// ActiveSubsOnServer lists active subscriptions hosted on a server.
+func (r *Repository) ActiveSubsOnServer(ctx context.Context, serverID uuid.UUID) ([]MigrationSub, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.id, s.user_id, s.country_id, s.protocol, s.label, u.telegram_id, co.name
+		FROM subscriptions s
+		JOIN users u ON u.id = s.user_id
+		JOIN countries co ON co.id = s.country_id
+		WHERE s.server_id = $1 AND s.status = 'active'`, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("active subs on server: %w", err)
+	}
+	defer rows.Close()
+	out := []MigrationSub{}
+	for rows.Next() {
+		var m MigrationSub
+		if err := rows.Scan(&m.SubID, &m.UserID, &m.CountryID, &m.Protocol, &m.Label, &m.TelegramID, &m.Country); err != nil {
+			return nil, fmt.Errorf("scan migration sub: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// GetServerByID loads a server by id.
+func (r *Repository) GetServerByID(ctx context.Context, id uuid.UUID) (Server, error) {
+	s, err := scanServer(r.pool.QueryRow(ctx, `SELECT `+serverColumns+` FROM servers WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Server{}, ErrNotFound
+	}
+	if err != nil {
+		return Server{}, fmt.Errorf("get server: %w", err)
+	}
+	return s, nil
+}
+
+// SelectReserveServer picks an alternative active server in a country for the
+// given protocol, preferring reserve servers and excluding excludeID.
+func (r *Repository) SelectReserveServer(ctx context.Context, countryID uuid.UUID, protocol Protocol, excludeID uuid.UUID) (Server, error) {
+	cond := protocolAvailabilityClause(protocol)
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+serverColumns+`
+		FROM servers
+		WHERE country_id = $1 AND status = 'active' AND id <> $2 AND `+cond+`
+		ORDER BY reserve DESC, priority ASC, client_count ASC
+		LIMIT 1`, countryID, excludeID)
+	s, err := scanServer(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Server{}, ErrNoServerAvailable
+	}
+	if err != nil {
+		return Server{}, fmt.Errorf("select reserve: %w", err)
+	}
+	return s, nil
+}
+
+// OldKeyForSub returns the active key material of a subscription (for deprovision).
+func (r *Repository) OldKeyForSub(ctx context.Context, subID uuid.UUID) (publicKey, clientUUID *string, err error) {
+	err = r.pool.QueryRow(ctx, `
+		SELECT k.public_key, k.client_uuid
+		FROM vpn_keys k JOIN vpn_configs c ON c.id = k.vpn_config_id
+		WHERE c.subscription_id = $1 AND k.status = 'active'
+		ORDER BY k.created_at DESC LIMIT 1`, subID).Scan(&publicKey, &clientUUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("old key: %w", err)
+	}
+	return publicKey, clientUUID, nil
+}
+
+// Reassign moves a subscription to a new server: revokes old keys, writes a new
+// config+key, updates the subscription and server loads, and records the migration.
+func (r *Repository) Reassign(ctx context.Context, p CreateParams, configID, subID, oldServerID uuid.UUID, reason string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err = tx.Exec(ctx, `UPDATE vpn_keys SET status='revoked'
+		WHERE vpn_config_id IN (SELECT id FROM vpn_configs WHERE subscription_id=$1)`, subID); err != nil {
+		return fmt.Errorf("revoke old keys: %w", err)
+	}
+
+	var version int
+	if err = tx.QueryRow(ctx,
+		`SELECT COALESCE(max(version),0)+1 FROM vpn_configs WHERE subscription_id=$1`, subID).Scan(&version); err != nil {
+		return fmt.Errorf("next version: %w", err)
+	}
+
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO vpn_configs (id, subscription_id, protocol, uri, config_object_key, qr_object_key, hash, version)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		configID, subID, string(p.Protocol), p.URI, p.ConfigObjectKey, p.QRObjectKey, p.Hash, version); err != nil {
+		return fmt.Errorf("insert config: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO vpn_keys (vpn_config_id, server_id, private_key, public_key, psk, client_uuid, assigned_ip)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		configID, p.Server.ID, p.PrivateKeyEnc, p.PublicKey, p.PSKEnc, p.ClientUUID, p.AssignedIP); err != nil {
+		return fmt.Errorf("insert key: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE subscriptions SET server_id=$2, status='active' WHERE id=$1`, subID, p.Server.ID); err != nil {
+		return fmt.Errorf("update subscription: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE servers SET client_count=client_count+1 WHERE id=$1`, p.Server.ID); err != nil {
+		return fmt.Errorf("inc new server: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE servers SET client_count=GREATEST(client_count-1,0) WHERE id=$1`, oldServerID); err != nil {
+		return fmt.Errorf("dec old server: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO migrations (subscription_id, user_id, from_server, to_server, reason)
+		VALUES ($1,$2,$3,$4,$5)`, subID, p.UserID, oldServerID, p.Server.ID, reason); err != nil {
+		return fmt.Errorf("insert migration: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 // ListUsedIPs returns active WireGuard addresses already assigned on a server.
 func (r *Repository) ListUsedIPs(ctx context.Context, serverID uuid.UUID) ([]string, error) {
 	rows, err := r.pool.Query(ctx, `

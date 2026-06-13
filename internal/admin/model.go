@@ -42,6 +42,7 @@ type ServerRow struct {
 	Capacity    int       `json:"capacity"`
 	Priority    int       `json:"priority"`
 	Reserve     bool      `json:"reserve"`
+	HealthScore int       `json:"health_score"`
 }
 
 // OrderRow is an order list entry.

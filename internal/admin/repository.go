@@ -79,7 +79,7 @@ func (r *Repository) SetUserRole(ctx context.Context, id uuid.UUID, role string)
 func (r *Repository) ListServers(ctx context.Context) ([]ServerRow, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT s.id, co.name, s.hostname, s.public_host, s.status,
-		       s.client_count, s.capacity, s.priority, s.reserve
+		       s.client_count, s.capacity, s.priority, s.reserve, s.health_score
 		FROM servers s JOIN countries co ON co.id = s.country_id
 		ORDER BY co.name, s.hostname`)
 	if err != nil {
@@ -90,7 +90,7 @@ func (r *Repository) ListServers(ctx context.Context) ([]ServerRow, error) {
 	for rows.Next() {
 		var s ServerRow
 		if err := rows.Scan(&s.ID, &s.Country, &s.Hostname, &s.PublicHost, &s.Status,
-			&s.ClientCount, &s.Capacity, &s.Priority, &s.Reserve); err != nil {
+			&s.ClientCount, &s.Capacity, &s.Priority, &s.Reserve, &s.HealthScore); err != nil {
 			return nil, fmt.Errorf("scan server: %w", err)
 		}
 		out = append(out, s)

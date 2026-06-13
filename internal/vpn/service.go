@@ -76,30 +76,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (VPNView, error) {
 		return VPNView{}, fmt.Errorf("provision node: %w", err)
 	}
 
-	cfgKey := "cfg/" + configID.String()
-
-	encConfig, err := s.cipher.Encrypt([]byte(gen.configText))
+	cfgKey, qrKey, err := s.storeConfig(ctx, configID, gen)
 	if err != nil {
 		return VPNView{}, err
-	}
-	if err := s.store.Put(ctx, cfgKey, []byte(encConfig), "application/octet-stream"); err != nil {
-		return VPNView{}, err
-	}
-
-	// QR is best-effort: split-tunnel WireGuard configs exceed the QR capacity,
-	// so large configs are delivered as a file instead of failing the purchase.
-	qrKey := ""
-	qrContent := gen.uri
-	if qrContent == "" {
-		qrContent = gen.configText
-	}
-	if png, qrErr := renderQRPNG(qrContent, 512); qrErr == nil {
-		qrKey = "qr/" + configID.String() + ".png"
-		if err := s.store.Put(ctx, qrKey, png, "image/png"); err != nil {
-			return VPNView{}, err
-		}
-	} else {
-		s.log.Info("skipping QR (config too large)", "bytes", len(qrContent))
 	}
 
 	params := CreateParams{
@@ -119,26 +98,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (VPNView, error) {
 		ClientUUID:      gen.clientUUID,
 		AssignedIP:      gen.assignedIP,
 	}
-	if gen.privateKey != nil {
-		enc, encErr := s.cipher.Encrypt([]byte(*gen.privateKey))
-		if encErr != nil {
-			return VPNView{}, encErr
-		}
-		params.PrivateKeyEnc = &enc
-	}
-	if gen.psk != nil {
-		enc, encErr := s.cipher.Encrypt([]byte(*gen.psk))
-		if encErr != nil {
-			return VPNView{}, encErr
-		}
-		params.PSKEnc = &enc
-	}
-	if gen.ssUserKey != nil {
-		enc, encErr := s.cipher.Encrypt([]byte(*gen.ssUserKey))
-		if encErr != nil {
-			return VPNView{}, encErr
-		}
-		params.PrivateKeyEnc = &enc
+	if err := s.applyEncryptedKeys(gen, &params); err != nil {
+		return VPNView{}, err
 	}
 
 	sub, cfg, err := s.repo.Persist(ctx, params, configID)
@@ -356,6 +317,149 @@ func (s *Service) Countries(ctx context.Context) ([]CountryRef, error) {
 // Plans returns the catalogue of active plans.
 func (s *Service) Plans(ctx context.Context) ([]PlanRef, error) {
 	return s.repo.ListPlans(ctx)
+}
+
+// storeConfig encrypts and stores the config (and a best-effort QR) in object
+// storage, returning their keys.
+func (s *Service) storeConfig(ctx context.Context, configID uuid.UUID, gen generated) (cfgKey, qrKey string, err error) {
+	cfgKey = "cfg/" + configID.String()
+	encConfig, err := s.cipher.Encrypt([]byte(gen.configText))
+	if err != nil {
+		return "", "", err
+	}
+	if err := s.store.Put(ctx, cfgKey, []byte(encConfig), "application/octet-stream"); err != nil {
+		return "", "", err
+	}
+	qrContent := gen.uri
+	if qrContent == "" {
+		qrContent = gen.configText
+	}
+	if png, qrErr := renderQRPNG(qrContent, 512); qrErr == nil {
+		qrKey = "qr/" + configID.String() + ".png"
+		if err := s.store.Put(ctx, qrKey, png, "image/png"); err != nil {
+			return "", "", err
+		}
+	} else {
+		s.log.Info("skipping QR (config too large)", "bytes", len(qrContent))
+	}
+	return cfgKey, qrKey, nil
+}
+
+// applyEncryptedKeys encrypts the generated secrets into the persistence params.
+func (s *Service) applyEncryptedKeys(gen generated, params *CreateParams) error {
+	enc := func(p *string) (*string, error) {
+		if p == nil {
+			return nil, nil
+		}
+		v, err := s.cipher.Encrypt([]byte(*p))
+		if err != nil {
+			return nil, err
+		}
+		return &v, nil
+	}
+	var err error
+	if params.PrivateKeyEnc, err = enc(gen.privateKey); err != nil {
+		return err
+	}
+	if params.PSKEnc, err = enc(gen.psk); err != nil {
+		return err
+	}
+	if gen.ssUserKey != nil {
+		if params.PrivateKeyEnc, err = enc(gen.ssUserKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MigrationResult describes one migrated subscription.
+type MigrationResult struct {
+	UserID     uuid.UUID
+	TelegramID *int64
+	Country    string
+	SubID      uuid.UUID
+}
+
+// MigrateServer re-issues every active subscription on a failed/blocked server
+// onto a reserve server in the same country, deprovisioning the old node
+// best-effort. Returns the migrated subscriptions (for notification).
+func (s *Service) MigrateServer(ctx context.Context, fromServerID uuid.UUID, reason string) ([]MigrationResult, error) {
+	subs, err := s.repo.ActiveSubsOnServer(ctx, fromServerID)
+	if err != nil {
+		return nil, err
+	}
+	oldServer, _ := s.repo.GetServerByID(ctx, fromServerID)
+
+	results := make([]MigrationResult, 0, len(subs))
+	for _, sub := range subs {
+		reserve, err := s.repo.SelectReserveServer(ctx, sub.CountryID, sub.Protocol, fromServerID)
+		if err != nil {
+			s.log.Warn("no reserve server for migration", "sub", sub.SubID, "country", sub.Country)
+			continue
+		}
+		oldPub, oldUUID, _ := s.repo.OldKeyForSub(ctx, sub.SubID)
+
+		label := "VPN"
+		if sub.Label != nil && *sub.Label != "" {
+			label = *sub.Label
+		}
+		gen, err := s.generate(ctx, reserve, sub.Protocol, label, RoutingFull)
+		if err != nil {
+			s.log.Warn("migrate: generate failed", "sub", sub.SubID, "error", err)
+			continue
+		}
+		if err := s.provision(ctx, reserve, sub.Protocol, gen); err != nil {
+			s.log.Warn("migrate: provision failed", "sub", sub.SubID, "error", err)
+			continue
+		}
+
+		configID := uuid.New()
+		cfgKey, qrKey, err := s.storeConfig(ctx, configID, gen)
+		if err != nil {
+			s.log.Warn("migrate: store failed", "sub", sub.SubID, "error", err)
+			continue
+		}
+		params := CreateParams{
+			UserID: sub.UserID, Server: reserve, Protocol: sub.Protocol,
+			URI: gen.uri, ConfigObjectKey: cfgKey, QRObjectKey: qrKey, Hash: gen.hash,
+			PublicKey: gen.publicKey, ClientUUID: gen.clientUUID, AssignedIP: gen.assignedIP,
+		}
+		if err := s.applyEncryptedKeys(gen, &params); err != nil {
+			s.log.Warn("migrate: encrypt failed", "sub", sub.SubID, "error", err)
+			continue
+		}
+		if err := s.repo.Reassign(ctx, params, configID, sub.SubID, fromServerID, reason); err != nil {
+			s.log.Warn("migrate: reassign failed", "sub", sub.SubID, "error", err)
+			continue
+		}
+
+		s.deprovisionOld(ctx, oldServer, sub.Protocol, oldPub, oldUUID)
+		results = append(results, MigrationResult{UserID: sub.UserID, TelegramID: sub.TelegramID, Country: sub.Country, SubID: sub.SubID})
+	}
+	if len(results) > 0 {
+		s.log.Info("migration complete", "from", fromServerID, "migrated", len(results), "reason", reason)
+	}
+	return results, nil
+}
+
+func (s *Service) deprovisionOld(ctx context.Context, oldServer Server, protocol Protocol, pub, clientUUID *string) {
+	if oldServer.ID == uuid.Nil {
+		return
+	}
+	switch protocol {
+	case ProtocolWireGuard:
+		if pub != nil {
+			_ = s.provisioner.RemoveWireGuardPeer(ctx, oldServer, *pub)
+		}
+	case ProtocolVLESSReality:
+		if clientUUID != nil {
+			_ = s.provisioner.RemoveVLESSClient(ctx, oldServer, *clientUUID)
+		}
+	case ProtocolShadowsocks:
+		if clientUUID != nil {
+			_ = s.provisioner.RemoveShadowsocksClient(ctx, oldServer, *clientUUID)
+		}
+	}
 }
 
 func sha256hex(s string) string {
