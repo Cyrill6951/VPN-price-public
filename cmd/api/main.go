@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/vpnsaas/platform/internal/admin"
 	"github.com/vpnsaas/platform/internal/auth"
 	"github.com/vpnsaas/platform/internal/billing"
@@ -134,6 +136,7 @@ func run() error {
 
 	// Monitoring: poll node health and auto-migrate clients off failed/blocked nodes.
 	go monitoring.NewEngine(db, vpnSvc, migrationNotifier, cfg.ProvisionerAgentToken, 30*time.Second, log).Run(ctx)
+	prometheus.MustRegister(monitoring.NewCollector(db))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", checker.Live)

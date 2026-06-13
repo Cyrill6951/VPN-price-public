@@ -1,0 +1,55 @@
+{
+  "uid": "vpn-overview",
+  "title": "VPN Platform Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Active servers",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "vpn_servers_active", "refId": "A" }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Active subscriptions",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "vpn_active_subscriptions", "refId": "A" }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Paid orders",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "vpn_orders_paid_total", "refId": "A" }]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Revenue (USD)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "vpn_revenue_total", "refId": "A" }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Server health score",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [{ "expr": "vpn_server_health_score", "legendFormat": "{{hostname}}", "refId": "A" }]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "HTTP request rate",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(http_requests_total[5m])) by (route)", "legendFormat": "{{route}}", "refId": "A" }]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }, "hide": 0
+      }
+    ]
+  }
+}
