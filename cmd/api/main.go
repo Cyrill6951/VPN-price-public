@@ -41,7 +41,7 @@ func (n tgNotifier) NotifyMigration(ctx context.Context, telegramID int64, count
 func main() {
 	if err := run(); err != nil {
 		// Logger may not be up yet; stderr is the safe fallback.
-		os.Stderr.WriteString("fatal: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("fatal: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 }
@@ -81,7 +81,8 @@ func run() error {
 	authRepo := auth.NewRepository(db)
 	authSvc := auth.NewService(authRepo, tokenMgr, rdb, cfg.TelegramBotToken)
 	authMW := auth.NewMiddleware(authSvc)
-	authHandler := auth.NewHandler(authSvc, authMW)
+	rateLimiter := httpx.NewRateLimiter(rdb)
+	authHandler := auth.NewHandler(authSvc, authMW, rateLimiter.Middleware("auth", 20, time.Minute))
 
 	// User module.
 	userRepo := user.NewRepository(db)
@@ -158,6 +159,8 @@ func run() error {
 
 	handler := httpx.Chain(mux,
 		httpx.RequestID,
+		httpx.SecurityHeaders,
+		rateLimiter.Middleware("global", 600, time.Minute),
 		httpx.Recover(log),
 		httpx.Observe(log, metrics),
 	)

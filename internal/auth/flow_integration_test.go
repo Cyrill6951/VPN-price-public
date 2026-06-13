@@ -55,7 +55,7 @@ func TestAuthFlow(t *testing.T) {
 	authMW := auth.NewMiddleware(authSvc)
 
 	mux := http.NewServeMux()
-	auth.NewHandler(authSvc, authMW).RegisterRoutes(mux)
+	auth.NewHandler(authSvc, authMW, nil).RegisterRoutes(mux)
 	user.NewHandler(user.NewRepository(pool), authMW).RegisterRoutes(mux)
 
 	srv := httptest.NewServer(mux)

@@ -76,27 +76,67 @@ func (r *Repository) CreateUserWithPassword(ctx context.Context, email, password
 	return u, nil
 }
 
-// GetAuthByEmail returns the user and its password hash for login.
-func (r *Repository) GetAuthByEmail(ctx context.Context, email string) (User, string, error) {
+// AuthRecord is the credential view used during login.
+type AuthRecord struct {
+	User         User
+	PasswordHash string
+	TOTPSecret   string
+	TOTPEnabled  bool
+}
+
+// GetAuthByEmail returns the user, its password hash and TOTP state for login.
+func (r *Repository) GetAuthByEmail(ctx context.Context, email string) (AuthRecord, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT `+userColumns+`, COALESCE(password_hash, '')
+		SELECT `+userColumns+`, COALESCE(password_hash, ''), COALESCE(totp_secret, ''), totp_enabled
 		FROM users
 		WHERE email = $1 AND deleted_at IS NULL`, email)
 
-	var u User
-	var hash string
+	var a AuthRecord
+	u := &a.User
 	err := row.Scan(
 		&u.ID, &u.Email, &u.Phone, &u.TelegramID, &u.Role, &u.Status,
 		&u.Language, &u.Timezone, &u.Currency, &u.Country, &u.CreatedAt, &u.UpdatedAt,
-		&hash,
+		&a.PasswordHash, &a.TOTPSecret, &a.TOTPEnabled,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, "", ErrInvalidCredentials
+		return AuthRecord{}, ErrInvalidCredentials
 	}
 	if err != nil {
-		return User{}, "", fmt.Errorf("get user by email: %w", err)
+		return AuthRecord{}, fmt.Errorf("get user by email: %w", err)
 	}
-	return u, hash, nil
+	return a, nil
+}
+
+// SetTOTPSecret stores a new (not yet enabled) TOTP secret.
+func (r *Repository) SetTOTPSecret(ctx context.Context, userID uuid.UUID, secret string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET totp_secret = $2, totp_enabled = false WHERE id = $1`, userID, secret)
+	return err
+}
+
+// EnableTOTP marks TOTP enabled for a user.
+func (r *Repository) EnableTOTP(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret IS NOT NULL`, userID)
+	return err
+}
+
+// DisableTOTP clears TOTP for a user.
+func (r *Repository) DisableTOTP(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET totp_secret = NULL, totp_enabled = false WHERE id = $1`, userID)
+	return err
+}
+
+// GetTOTP returns a user's TOTP secret and enabled flag.
+func (r *Repository) GetTOTP(ctx context.Context, userID uuid.UUID) (secret string, enabled bool, err error) {
+	err = r.pool.QueryRow(ctx,
+		`SELECT COALESCE(totp_secret,''), totp_enabled FROM users WHERE id = $1 AND deleted_at IS NULL`, userID).
+		Scan(&secret, &enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, ErrNotFound
+	}
+	return secret, enabled, err
 }
 
 // GetUserByID returns a user by id.

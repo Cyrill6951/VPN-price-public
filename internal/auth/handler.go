@@ -1,32 +1,79 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Handler exposes the auth HTTP endpoints.
 type Handler struct {
-	svc *Service
-	mw  *Middleware
+	svc        *Service
+	mw         *Middleware
+	loginLimit func(http.Handler) http.Handler
 }
 
-// NewHandler builds the auth handler.
-func NewHandler(svc *Service, mw *Middleware) *Handler {
-	return &Handler{svc: svc, mw: mw}
+// NewHandler builds the auth handler. loginLimit, if non-nil, throttles the
+// credential endpoints (login/register/telegram) against brute force.
+func NewHandler(svc *Service, mw *Middleware, loginLimit func(http.Handler) http.Handler) *Handler {
+	if loginLimit == nil {
+		loginLimit = func(next http.Handler) http.Handler { return next }
+	}
+	return &Handler{svc: svc, mw: mw, loginLimit: loginLimit}
 }
 
 // RegisterRoutes mounts auth endpoints under /api/v1/auth on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/auth/register", h.register)
-	mux.HandleFunc("POST /api/v1/auth/login", h.login)
+	lim := h.loginLimit
+	mux.Handle("POST /api/v1/auth/register", lim(http.HandlerFunc(h.register)))
+	mux.Handle("POST /api/v1/auth/login", lim(http.HandlerFunc(h.login)))
+	mux.Handle("POST /api/v1/auth/telegram", lim(http.HandlerFunc(h.telegram)))
 	mux.HandleFunc("POST /api/v1/auth/refresh", h.refresh)
-	mux.HandleFunc("POST /api/v1/auth/telegram", h.telegram)
 	// Logout requires a valid access token.
 	mux.Handle("POST /api/v1/auth/logout", h.mw.Authenticate(http.HandlerFunc(h.logout)))
+
+	// Two-factor (TOTP) management — all require an access token.
+	mux.Handle("POST /api/v1/auth/2fa/setup", h.mw.Authenticate(http.HandlerFunc(h.twoFASetup)))
+	mux.Handle("POST /api/v1/auth/2fa/enable", h.mw.Authenticate(http.HandlerFunc(h.twoFAEnable)))
+	mux.Handle("POST /api/v1/auth/2fa/disable", h.mw.Authenticate(http.HandlerFunc(h.twoFADisable)))
+}
+
+func (h *Handler) twoFASetup(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	secret, uri, err := h.svc.Setup2FA(r.Context(), p.UserID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"secret": secret, "otpauth_uri": uri})
+}
+
+func (h *Handler) twoFAEnable(w http.ResponseWriter, r *http.Request) {
+	h.twoFAOp(w, r, h.svc.Enable2FA, "enabled")
+}
+
+func (h *Handler) twoFADisable(w http.ResponseWriter, r *http.Request) {
+	h.twoFAOp(w, r, h.svc.Disable2FA, "disabled")
+}
+
+func (h *Handler) twoFAOp(w http.ResponseWriter, r *http.Request, op func(context.Context, uuid.UUID, string) error, okStatus string) {
+	p, _ := PrincipalFromContext(r.Context())
+	var req struct {
+		Code string `json:"code"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := op(r.Context(), p.UserID, req.Code); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": okStatus})
 }
 
 type authResponse struct {
@@ -60,11 +107,12 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		TOTP     string `json:"totp"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	u, tokens, err := h.svc.Login(r.Context(), strings.TrimSpace(req.Email), req.Password, metaFromRequest(r))
+	u, tokens, err := h.svc.Login(r.Context(), strings.TrimSpace(req.Email), req.Password, req.TOTP, metaFromRequest(r))
 	if err != nil {
 		writeDomainError(w, err)
 		return
@@ -147,6 +195,10 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrTelegramSignature):
 		writeError(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, Err2FARequired), errors.Is(err, ErrInvalidTOTP):
+		writeError(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, ErrTOTPNotSetup):
+		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	default:

@@ -268,8 +268,8 @@ func (b *Bot) vpnListText(views []vpn.VPNView) string {
 	var sb strings.Builder
 	sb.WriteString("📄 <b>Ваши VPN</b>\n")
 	for _, v := range views {
-		sb.WriteString(fmt.Sprintf("\n• %s · %s · до %s",
-			v.Country, v.Subscription.Protocol, v.Subscription.ExpiresAt.Format("2006-01-02")))
+		fmt.Fprintf(&sb, "\n• %s · %s · до %s",
+			v.Country, v.Subscription.Protocol, v.Subscription.ExpiresAt.Format("2006-01-02"))
 	}
 	return sb.String()
 }

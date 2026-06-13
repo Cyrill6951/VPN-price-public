@@ -50,23 +50,82 @@ func (s *Service) Register(ctx context.Context, email, password, language string
 	return u, pair, nil
 }
 
-// Login verifies credentials and issues tokens.
-func (s *Service) Login(ctx context.Context, email, password string, meta LoginMeta) (User, TokenPair, error) {
-	u, hash, err := s.repo.GetAuthByEmail(ctx, email)
+// Login verifies credentials (and a TOTP code when 2FA is enabled) and issues tokens.
+func (s *Service) Login(ctx context.Context, email, password, totp string, meta LoginMeta) (User, TokenPair, error) {
+	rec, err := s.repo.GetAuthByEmail(ctx, email)
 	if err != nil {
 		return User{}, TokenPair{}, err
 	}
-	if hash == "" || !CheckPassword(hash, password) {
+	if rec.PasswordHash == "" || !CheckPassword(rec.PasswordHash, password) {
 		return User{}, TokenPair{}, ErrInvalidCredentials
 	}
-	if u.Status == StatusBlocked {
+	if rec.User.Status == StatusBlocked {
 		return User{}, TokenPair{}, ErrUserBlocked
 	}
-	pair, err := s.issueTokens(ctx, u, meta)
+	if rec.TOTPEnabled {
+		if totp == "" {
+			return User{}, TokenPair{}, Err2FARequired
+		}
+		if !ValidateTOTP(rec.TOTPSecret, totp) {
+			return User{}, TokenPair{}, ErrInvalidTOTP
+		}
+	}
+	pair, err := s.issueTokens(ctx, rec.User, meta)
 	if err != nil {
 		return User{}, TokenPair{}, err
 	}
-	return u, pair, nil
+	return rec.User, pair, nil
+}
+
+// Setup2FA generates a new TOTP secret for the user and returns it with an
+// otpauth URI for a QR code. 2FA is not enabled until confirmed via Enable2FA.
+func (s *Service) Setup2FA(ctx context.Context, userID uuid.UUID) (secret, uri string, err error) {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return "", "", err
+	}
+	secret, err = GenerateTOTPSecret()
+	if err != nil {
+		return "", "", err
+	}
+	if err := s.repo.SetTOTPSecret(ctx, userID, secret); err != nil {
+		return "", "", err
+	}
+	account := userID.String()
+	if u.Email != nil {
+		account = *u.Email
+	}
+	return secret, TOTPURI(secret, account), nil
+}
+
+// Enable2FA verifies a code against the pending secret and enables 2FA.
+func (s *Service) Enable2FA(ctx context.Context, userID uuid.UUID, code string) error {
+	secret, _, err := s.repo.GetTOTP(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if secret == "" {
+		return ErrTOTPNotSetup
+	}
+	if !ValidateTOTP(secret, code) {
+		return ErrInvalidTOTP
+	}
+	return s.repo.EnableTOTP(ctx, userID)
+}
+
+// Disable2FA verifies a current code and disables 2FA.
+func (s *Service) Disable2FA(ctx context.Context, userID uuid.UUID, code string) error {
+	secret, enabled, err := s.repo.GetTOTP(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !enabled || secret == "" {
+		return ErrTOTPNotSetup
+	}
+	if !ValidateTOTP(secret, code) {
+		return ErrInvalidTOTP
+	}
+	return s.repo.DisableTOTP(ctx, userID)
 }
 
 // TelegramLogin verifies the Telegram signature and logs in or provisions a user.

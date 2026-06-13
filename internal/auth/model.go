@@ -67,4 +67,7 @@ var (
 	ErrSessionRevoked     = errors.New("session revoked or expired")
 	ErrTelegramSignature  = errors.New("invalid telegram signature")
 	ErrNotFound           = errors.New("not found")
+	Err2FARequired        = errors.New("two-factor code required")
+	ErrInvalidTOTP        = errors.New("invalid two-factor code")
+	ErrTOTPNotSetup       = errors.New("two-factor is not set up")
 )

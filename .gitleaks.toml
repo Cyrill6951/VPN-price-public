@@ -1,0 +1,18 @@
+# gitleaks configuration — extends the default ruleset and allowlists known
+# non-secret development placeholders (these MUST be overridden in production).
+title = "vpn-platform gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Development placeholders, not real secrets"
+regexes = [
+  # Insecure default AES key for VPN config encryption (dev/tests only).
+  '''00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff''',
+  # Insecure default JWT secret in .env.example.
+  '''dev-insecure-change-me-0123456789abcdef''',
+]
+paths = [
+  '''^\.env\.example$''',
+]
